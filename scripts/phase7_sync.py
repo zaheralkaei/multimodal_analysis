@@ -100,6 +100,7 @@ def join_data(shots: list[dict], vision: list[dict], camera: list[dict],
             "vision_location": v.get("location", ""),
             "vision_lighting": v.get("lighting", ""),
             "vision_composition": v.get("composition", ""),
+            "mid_frame": v.get("mid_frame", ""),  # propagate for dashboard thumbnails
             # Camera (from Phase 3)
             "camera_motion": c.get("camera_motion", ""),
             "camera_pan_score": c.get("pan_score_mean", ""),

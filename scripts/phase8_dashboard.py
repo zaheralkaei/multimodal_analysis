@@ -241,16 +241,38 @@ def main() -> int:
     else:
         mood_avg_html = "<p><i>No CLAP data</i></p>"
 
-    # ===== Chart 5: Per-shot detail table (top N, all shots) =====
+    # ===== Chart 5: Per-shot detail table (all shots with thumbnails) =====
+    # Copy mid-frames to reports/frames/ so dashboard works as a self-contained file
+    report_frames_dir = REPORTS / "frames"
+    report_frames_dir.mkdir(exist_ok=True)
+    import shutil
+    n_copied = 0
+    for s in shots:
+        mid_rel = s.get("mid_frame", "")
+        if mid_rel:
+            src = REPO_ROOT / mid_rel
+            if src.exists():
+                dst = report_frames_dir / src.name
+                if not dst.exists():  # avoid re-copying on every regen
+                    shutil.copy2(src, dst)
+                    n_copied += 1
+    print(f"[info] copied {n_copied} mid-frames to {report_frames_dir.relative_to(REPO_ROOT)}")
+
     n_rows = len(shots)
     table_rows = []
-    headers = ["#", "Time", "Dur", "Emotion", "Camera", "Caption", "Audio", "Lyrics"]
+    headers = ["Thumb", "#", "Time", "Dur", "Emotion", "Camera", "Caption", "Audio", "Lyrics"]
     table_rows.append(headers)
     for i, s in enumerate(shots):
         lyrics = html_lib.escape(s.get("lyric_text", "") or "—")
         if len(lyrics) > 60:
             lyrics = lyrics[:60] + "…"
+        mid_rel = s.get("mid_frame", "")
+        thumb_path = ""
+        if mid_rel:
+            # Use the reports/frames/ copy for self-contained HTML
+            thumb_path = f"frames/{Path(mid_rel).name}"
         table_rows.append([
+            thumb_path,
             i,
             f"{float(s['start_sec']):.1f}-{float(s['end_sec']):.1f}s",
             f"{float(s['duration_sec']):.1f}s",
@@ -260,7 +282,7 @@ def main() -> int:
             html_lib.escape(s.get("audio_top_mood", "") or "—"),
             lyrics,
         ])
-    table_html = "<table id='shotTable' border='1' style='border-collapse:collapse;font-family:monospace;font-size:12px;width:100%;'>"
+    table_html = "<table id='shotTable' border='1' style='border-collapse:collapse;font-family:monospace;font-size:11px;width:100%;'>"
     for ri, row in enumerate(table_rows):
         is_header = (ri == 0)
         tag = "th" if is_header else "td"
@@ -268,7 +290,18 @@ def main() -> int:
         cells = []
         for ci, cell in enumerate(row):
             bg = "#eee" if is_header else ""
-            if not is_header and ci == 3:  # emotion column
+            if is_header:
+                cells.append(f"<{tag} style='padding:6px 8px;background:#eee;text-align:left;'>{cell}</{tag}>")
+            elif ci == 0:  # thumbnail column
+                if cell:
+                    cells.append(f"<{tag} style='padding:2px;background:#fff;text-align:center;'>"
+                                 f"<img src='{cell}' loading='lazy' "
+                                 f"style='width:80px;height:auto;border:1px solid #ccc;cursor:pointer;' "
+                                 f"onclick='window.open(this.src,\"_blank\")'/>"
+                                 f"</{tag}>")
+                else:
+                    cells.append(f"<{tag} style='padding:4px 8px;background:{bg};text-align:left;'>—</{tag}>")
+            elif ci == 4:  # emotion column
                 bg = color_for_emotion(str(cell))
                 text_color = "white" if bg in ["#000000", "#1f77b4", "#9467bd", "#d62728"] else "black"
                 cells.append(f"<{tag} style='padding:4px 8px;background:{bg};color:{text_color};text-align:left;'>{cell}</{tag}>")
@@ -276,6 +309,7 @@ def main() -> int:
                 cells.append(f"<{tag} style='padding:4px 8px;background:{bg};text-align:left;'>{cell}</{tag}>")
         table_html += "<tr>" + "".join(cells) + "</tr>"
     table_html += "</table>"
+    table_html += "<p style='font-size:11px;color:#666;margin-top:4px;'>Click any thumbnail to view full-size.</p>"
 
     # ===== Honest findings =====
     findings = []
@@ -347,6 +381,7 @@ def main() -> int:
     h2 {{ margin-top: 32px; color: #444; border-bottom: 1px solid #ddd; padding-bottom: 4px; }}
     .findings {{ background: #f0f4f8; border-left: 4px solid #2ca02c; padding: 12px 16px; margin: 20px 0; }}
     .caveat {{ background: #fff8e1; border-left: 4px solid #ff9800; padding: 12px 16px; margin: 20px 0; font-size: 14px; }}
+    .section-subtitle {{ background: #f5f5f5; padding: 10px 14px; border-radius: 4px; font-size: 13px; line-height: 1.6; margin: 8px 0 16px; color: #333; }}
     .quality {{ background: #f5f5f5; padding: 12px 16px; margin: 20px 0; border-radius: 4px; }}
     .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 20px 0; }}
     @media (max-width: 900px) {{ .grid {{ grid-template-columns: 1fr; }} }}
@@ -375,13 +410,16 @@ def main() -> int:
 
 <div class="quality">
   <h2>Data quality</h2>
+<p class="section-subtitle"><b>Method:</b> Auto-computed table from <code>data/processed/*.json</code>. Each row shows ✓/⚠ + the actual numbers. Frame count, frame rate, detector params, and model names all come from the upstream files (metadata.json, shot_detection_stats.json, sync_stats.json). If a model is wrong, regenerate it and re-run this script.</p>
   {dq_html}
 </div>
 
 <h2>1. Synchronized timeline</h2>
+<p class="section-subtitle"><b>Method:</b> 4 stacked tracks sharing the x-axis. <b>Shots</b> = bars colored by visual emotion (from Gemini 3 Flash captions), positioned at each shot's start time. <b>Audio mood</b> = top-4 CLAP tags by variance, plotted as curves over the 5s windows. <b>Energy + beats</b> = librosa RMS per second + beat tracker ticks. <b>Lyrics</b> = faster-whisper segments.</p>
 {timeline_html}
 
 <h2>2. Per-modality breakdowns</h2>
+<p class="section-subtitle"><b>Method:</b> Aggregations across all {len(shots)} shots. <b>Emotion</b> = Gemini 3 Flash caption emotion word, color-coded by sentiment family. <b>Camera motion</b> = OpenCV optical flow classification (pan/tilt/zoom/static), see Phase 3 docstring for the per-class decision boundaries. <b>Audio mood</b> = mean CLAP probability for each of 12 mood tags across all 5s windows.</p>
 <div class="grid">
   <div class="panel">{emotion_dist_html}</div>
   <div class="panel">{cam_dist_html}</div>
@@ -389,7 +427,7 @@ def main() -> int:
 <div class="panel">{mood_avg_html}</div>
 
 <h2>3. Per-shot detail ({len(shots)} shots total)</h2>
-<p>Click a header to sort. Color = visual emotion.</p>
+<p class="section-subtitle"><b>Method:</b> One row per shot from PySceneDetect ContentDetector. <b>Thumbnail</b> = mid-frame of the shot (the same image sent to the vision model). <b>Emotion</b> = Gemini 3 Flash answer to "What is the dominant emotion shown?". <b>Camera</b> = OpenCV optical flow dominant motion class for the shot. <b>Caption</b> = first 80 chars of Gemini 3 Flash caption. <b>Audio</b> = highest-probability CLAP mood tag averaged across the shot's duration. <b>Lyrics</b> = faster-whisper text overlapping the shot (truncated to 60 chars).</p>
 {table_html}
 
 <div class="caveat">
