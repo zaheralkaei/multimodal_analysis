@@ -1,0 +1,47 @@
+[
+  {
+    "start_sec": 0.05,
+    "end_sec": 2.05,
+    "duration_sec": 2.0,
+    "text": "Deep down you want me",
+    "avg_logprob": -0.526,
+    "no_speech_prob": 0.205,
+    "compression_ratio": 1.549
+  },
+  {
+    "start_sec": 12.77,
+    "end_sec": 18.93,
+    "duration_sec": 6.16,
+    "text": "Dictive baby what you want me to do not a quick fix one hit my room when you have less than a less than you",
+    "avg_logprob": -0.526,
+    "no_speech_prob": 0.205,
+    "compression_ratio": 1.549
+  },
+  {
+    "start_sec": 18.93,
+    "end_sec": 22.61,
+    "duration_sec": 3.68,
+    "text": "Don't need to learn when you're playing with fire. You're begging to find out",
+    "avg_logprob": -0.526,
+    "no_speech_prob": 0.205,
+    "compression_ratio": 1.549
+  },
+  {
+    "start_sec": 23.17,
+    "end_sec": 30.0,
+    "duration_sec": 6.83,
+    "text": "You're safe save her the heartbreak. There's a sweet change",
+    "avg_logprob": -0.526,
+    "no_speech_prob": 0.205,
+    "compression_ratio": 1.549
+  },
+  {
+    "start_sec": 30.8,
+    "end_sec": 36.04,
+    "duration_sec": 5.24,
+    "text": "No, it's not safe",
+    "avg_logprob": -0.526,
+    "no_speech_prob": 0.205,
+    "compression_ratio": 1.549
+  }
+]

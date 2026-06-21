@@ -1,0 +1,650 @@
+[
+  {
+    "shot_idx": 0,
+    "start_sec": 0.0,
+    "end_sec": 2.836,
+    "duration_sec": 2.836,
+    "mid_sec": 1.418,
+    "mid_frame_path": "data/processed/frames/frame_00002.jpg",
+    "n_frames": 3
+  },
+  {
+    "shot_idx": 1,
+    "start_sec": 2.836,
+    "end_sec": 5.214,
+    "duration_sec": 2.377,
+    "mid_sec": 4.025,
+    "mid_frame_path": "data/processed/frames/frame_00005.jpg",
+    "n_frames": 3
+  },
+  {
+    "shot_idx": 2,
+    "start_sec": 5.214,
+    "end_sec": 6.59,
+    "duration_sec": 1.376,
+    "mid_sec": 5.902,
+    "mid_frame_path": "data/processed/frames/frame_00006.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 3,
+    "start_sec": 6.59,
+    "end_sec": 9.343,
+    "duration_sec": 2.753,
+    "mid_sec": 7.966,
+    "mid_frame_path": "data/processed/frames/frame_00008.jpg",
+    "n_frames": 3
+  },
+  {
+    "shot_idx": 4,
+    "start_sec": 9.343,
+    "end_sec": 11.136,
+    "duration_sec": 1.793,
+    "mid_sec": 10.239,
+    "mid_frame_path": "data/processed/frames/frame_00011.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 5,
+    "start_sec": 11.136,
+    "end_sec": 15.182,
+    "duration_sec": 4.046,
+    "mid_sec": 13.159,
+    "mid_frame_path": "data/processed/frames/frame_00014.jpg",
+    "n_frames": 5
+  },
+  {
+    "shot_idx": 6,
+    "start_sec": 15.182,
+    "end_sec": 17.392,
+    "duration_sec": 2.211,
+    "mid_sec": 16.287,
+    "mid_frame_path": "data/processed/frames/frame_00017.jpg",
+    "n_frames": 3
+  },
+  {
+    "shot_idx": 7,
+    "start_sec": 17.392,
+    "end_sec": 22.189,
+    "duration_sec": 4.796,
+    "mid_sec": 19.791,
+    "mid_frame_path": "data/processed/frames/frame_00020.jpg",
+    "n_frames": 5
+  },
+  {
+    "shot_idx": 8,
+    "start_sec": 22.189,
+    "end_sec": 23.774,
+    "duration_sec": 1.585,
+    "mid_sec": 22.981,
+    "mid_frame_path": "data/processed/frames/frame_00023.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 9,
+    "start_sec": 23.774,
+    "end_sec": 26.86,
+    "duration_sec": 3.086,
+    "mid_sec": 25.317,
+    "mid_frame_path": "data/processed/frames/frame_00026.jpg",
+    "n_frames": 4
+  },
+  {
+    "shot_idx": 10,
+    "start_sec": 26.86,
+    "end_sec": 29.821,
+    "duration_sec": 2.961,
+    "mid_sec": 28.341,
+    "mid_frame_path": "data/processed/frames/frame_00029.jpg",
+    "n_frames": 3
+  },
+  {
+    "shot_idx": 11,
+    "start_sec": 29.821,
+    "end_sec": 31.24,
+    "duration_sec": 1.418,
+    "mid_sec": 30.53,
+    "mid_frame_path": "data/processed/frames/frame_00031.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 12,
+    "start_sec": 31.24,
+    "end_sec": 32.532,
+    "duration_sec": 1.293,
+    "mid_sec": 31.886,
+    "mid_frame_path": "data/processed/frames/frame_00032.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 13,
+    "start_sec": 32.532,
+    "end_sec": 35.41,
+    "duration_sec": 2.878,
+    "mid_sec": 33.971,
+    "mid_frame_path": "data/processed/frames/frame_00034.jpg",
+    "n_frames": 3
+  },
+  {
+    "shot_idx": 14,
+    "start_sec": 35.41,
+    "end_sec": 37.913,
+    "duration_sec": 2.502,
+    "mid_sec": 36.662,
+    "mid_frame_path": "data/processed/frames/frame_00037.jpg",
+    "n_frames": 3
+  },
+  {
+    "shot_idx": 15,
+    "start_sec": 37.913,
+    "end_sec": 39.915,
+    "duration_sec": 2.002,
+    "mid_sec": 38.914,
+    "mid_frame_path": "data/processed/frames/frame_00039.jpg",
+    "n_frames": 3
+  },
+  {
+    "shot_idx": 16,
+    "start_sec": 39.915,
+    "end_sec": 47.589,
+    "duration_sec": 7.674,
+    "mid_sec": 43.752,
+    "mid_frame_path": "data/processed/frames/frame_00044.jpg",
+    "n_frames": 8
+  },
+  {
+    "shot_idx": 17,
+    "start_sec": 47.589,
+    "end_sec": 49.633,
+    "duration_sec": 2.044,
+    "mid_sec": 48.611,
+    "mid_frame_path": "data/processed/frames/frame_00049.jpg",
+    "n_frames": 3
+  },
+  {
+    "shot_idx": 18,
+    "start_sec": 49.633,
+    "end_sec": 51.593,
+    "duration_sec": 1.96,
+    "mid_sec": 50.613,
+    "mid_frame_path": "data/processed/frames/frame_00051.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 19,
+    "start_sec": 51.593,
+    "end_sec": 56.306,
+    "duration_sec": 4.713,
+    "mid_sec": 53.95,
+    "mid_frame_path": "data/processed/frames/frame_00054.jpg",
+    "n_frames": 5
+  },
+  {
+    "shot_idx": 20,
+    "start_sec": 56.306,
+    "end_sec": 61.728,
+    "duration_sec": 5.422,
+    "mid_sec": 59.017,
+    "mid_frame_path": "data/processed/frames/frame_00060.jpg",
+    "n_frames": 6
+  },
+  {
+    "shot_idx": 21,
+    "start_sec": 61.728,
+    "end_sec": 63.272,
+    "duration_sec": 1.543,
+    "mid_sec": 62.5,
+    "mid_frame_path": "data/processed/frames/frame_00063.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 22,
+    "start_sec": 63.272,
+    "end_sec": 65.732,
+    "duration_sec": 2.461,
+    "mid_sec": 64.502,
+    "mid_frame_path": "data/processed/frames/frame_00065.jpg",
+    "n_frames": 3
+  },
+  {
+    "shot_idx": 23,
+    "start_sec": 65.732,
+    "end_sec": 67.15,
+    "duration_sec": 1.418,
+    "mid_sec": 66.441,
+    "mid_frame_path": "data/processed/frames/frame_00067.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 24,
+    "start_sec": 67.15,
+    "end_sec": 70.362,
+    "duration_sec": 3.212,
+    "mid_sec": 68.756,
+    "mid_frame_path": "data/processed/frames/frame_00069.jpg",
+    "n_frames": 4
+  },
+  {
+    "shot_idx": 25,
+    "start_sec": 70.362,
+    "end_sec": 71.822,
+    "duration_sec": 1.46,
+    "mid_sec": 71.092,
+    "mid_frame_path": "data/processed/frames/frame_00072.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 26,
+    "start_sec": 71.822,
+    "end_sec": 76.827,
+    "duration_sec": 5.005,
+    "mid_sec": 74.324,
+    "mid_frame_path": "data/processed/frames/frame_00075.jpg",
+    "n_frames": 6
+  },
+  {
+    "shot_idx": 27,
+    "start_sec": 76.827,
+    "end_sec": 79.788,
+    "duration_sec": 2.961,
+    "mid_sec": 78.307,
+    "mid_frame_path": "data/processed/frames/frame_00079.jpg",
+    "n_frames": 3
+  },
+  {
+    "shot_idx": 28,
+    "start_sec": 79.788,
+    "end_sec": 81.665,
+    "duration_sec": 1.877,
+    "mid_sec": 80.726,
+    "mid_frame_path": "data/processed/frames/frame_00081.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 29,
+    "start_sec": 81.665,
+    "end_sec": 84.084,
+    "duration_sec": 2.419,
+    "mid_sec": 82.874,
+    "mid_frame_path": "data/processed/frames/frame_00083.jpg",
+    "n_frames": 3
+  },
+  {
+    "shot_idx": 30,
+    "start_sec": 84.084,
+    "end_sec": 86.67,
+    "duration_sec": 2.586,
+    "mid_sec": 85.377,
+    "mid_frame_path": "data/processed/frames/frame_00086.jpg",
+    "n_frames": 3
+  },
+  {
+    "shot_idx": 31,
+    "start_sec": 86.67,
+    "end_sec": 88.046,
+    "duration_sec": 1.376,
+    "mid_sec": 87.358,
+    "mid_frame_path": "data/processed/frames/frame_00088.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 32,
+    "start_sec": 88.046,
+    "end_sec": 94.845,
+    "duration_sec": 6.798,
+    "mid_sec": 91.446,
+    "mid_frame_path": "data/processed/frames/frame_00092.jpg",
+    "n_frames": 7
+  },
+  {
+    "shot_idx": 33,
+    "start_sec": 94.845,
+    "end_sec": 96.722,
+    "duration_sec": 1.877,
+    "mid_sec": 95.783,
+    "mid_frame_path": "data/processed/frames/frame_00096.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 34,
+    "start_sec": 96.722,
+    "end_sec": 99.725,
+    "duration_sec": 3.003,
+    "mid_sec": 98.223,
+    "mid_frame_path": "data/processed/frames/frame_00099.jpg",
+    "n_frames": 4
+  },
+  {
+    "shot_idx": 35,
+    "start_sec": 99.725,
+    "end_sec": 101.768,
+    "duration_sec": 2.044,
+    "mid_sec": 100.746,
+    "mid_frame_path": "data/processed/frames/frame_00101.jpg",
+    "n_frames": 3
+  },
+  {
+    "shot_idx": 36,
+    "start_sec": 101.768,
+    "end_sec": 106.648,
+    "duration_sec": 4.88,
+    "mid_sec": 104.208,
+    "mid_frame_path": "data/processed/frames/frame_00105.jpg",
+    "n_frames": 5
+  },
+  {
+    "shot_idx": 37,
+    "start_sec": 106.648,
+    "end_sec": 108.358,
+    "duration_sec": 1.71,
+    "mid_sec": 107.503,
+    "mid_frame_path": "data/processed/frames/frame_00108.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 38,
+    "start_sec": 108.358,
+    "end_sec": 111.695,
+    "duration_sec": 3.337,
+    "mid_sec": 110.027,
+    "mid_frame_path": "data/processed/frames/frame_00111.jpg",
+    "n_frames": 4
+  },
+  {
+    "shot_idx": 39,
+    "start_sec": 111.695,
+    "end_sec": 113.322,
+    "duration_sec": 1.627,
+    "mid_sec": 112.508,
+    "mid_frame_path": "data/processed/frames/frame_00113.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 40,
+    "start_sec": 113.322,
+    "end_sec": 121.58,
+    "duration_sec": 8.258,
+    "mid_sec": 117.451,
+    "mid_frame_path": "data/processed/frames/frame_00118.jpg",
+    "n_frames": 9
+  },
+  {
+    "shot_idx": 41,
+    "start_sec": 121.58,
+    "end_sec": 122.873,
+    "duration_sec": 1.293,
+    "mid_sec": 122.226,
+    "mid_frame_path": "data/processed/frames/frame_00123.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 42,
+    "start_sec": 122.873,
+    "end_sec": 130.839,
+    "duration_sec": 7.966,
+    "mid_sec": 126.856,
+    "mid_frame_path": "data/processed/frames/frame_00127.jpg",
+    "n_frames": 8
+  },
+  {
+    "shot_idx": 43,
+    "start_sec": 130.839,
+    "end_sec": 133.008,
+    "duration_sec": 2.169,
+    "mid_sec": 131.923,
+    "mid_frame_path": "data/processed/frames/frame_00132.jpg",
+    "n_frames": 3
+  },
+  {
+    "shot_idx": 44,
+    "start_sec": 133.008,
+    "end_sec": 135.385,
+    "duration_sec": 2.377,
+    "mid_sec": 134.197,
+    "mid_frame_path": "data/processed/frames/frame_00135.jpg",
+    "n_frames": 3
+  },
+  {
+    "shot_idx": 45,
+    "start_sec": 135.385,
+    "end_sec": 138.096,
+    "duration_sec": 2.711,
+    "mid_sec": 136.741,
+    "mid_frame_path": "data/processed/frames/frame_00137.jpg",
+    "n_frames": 3
+  },
+  {
+    "shot_idx": 46,
+    "start_sec": 138.096,
+    "end_sec": 139.431,
+    "duration_sec": 1.335,
+    "mid_sec": 138.764,
+    "mid_frame_path": "data/processed/frames/frame_00139.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 47,
+    "start_sec": 139.431,
+    "end_sec": 143.101,
+    "duration_sec": 3.67,
+    "mid_sec": 141.266,
+    "mid_frame_path": "data/processed/frames/frame_00142.jpg",
+    "n_frames": 4
+  },
+  {
+    "shot_idx": 48,
+    "start_sec": 143.101,
+    "end_sec": 144.478,
+    "duration_sec": 1.376,
+    "mid_sec": 143.789,
+    "mid_frame_path": "data/processed/frames/frame_00144.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 49,
+    "start_sec": 144.478,
+    "end_sec": 147.522,
+    "duration_sec": 3.045,
+    "mid_sec": 146.0,
+    "mid_frame_path": "data/processed/frames/frame_00147.jpg",
+    "n_frames": 4
+  },
+  {
+    "shot_idx": 50,
+    "start_sec": 147.522,
+    "end_sec": 149.775,
+    "duration_sec": 2.252,
+    "mid_sec": 148.649,
+    "mid_frame_path": "data/processed/frames/frame_00149.jpg",
+    "n_frames": 3
+  },
+  {
+    "shot_idx": 51,
+    "start_sec": 149.775,
+    "end_sec": 154.488,
+    "duration_sec": 4.713,
+    "mid_sec": 152.131,
+    "mid_frame_path": "data/processed/frames/frame_00153.jpg",
+    "n_frames": 5
+  },
+  {
+    "shot_idx": 52,
+    "start_sec": 154.488,
+    "end_sec": 155.864,
+    "duration_sec": 1.376,
+    "mid_sec": 155.176,
+    "mid_frame_path": "data/processed/frames/frame_00156.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 53,
+    "start_sec": 155.864,
+    "end_sec": 159.743,
+    "duration_sec": 3.879,
+    "mid_sec": 157.803,
+    "mid_frame_path": "data/processed/frames/frame_00158.jpg",
+    "n_frames": 4
+  },
+  {
+    "shot_idx": 54,
+    "start_sec": 159.743,
+    "end_sec": 161.078,
+    "duration_sec": 1.335,
+    "mid_sec": 160.41,
+    "mid_frame_path": "data/processed/frames/frame_00161.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 55,
+    "start_sec": 161.078,
+    "end_sec": 162.579,
+    "duration_sec": 1.501,
+    "mid_sec": 161.828,
+    "mid_frame_path": "data/processed/frames/frame_00162.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 56,
+    "start_sec": 162.579,
+    "end_sec": 172.047,
+    "duration_sec": 9.468,
+    "mid_sec": 167.313,
+    "mid_frame_path": "data/processed/frames/frame_00168.jpg",
+    "n_frames": 10
+  },
+  {
+    "shot_idx": 57,
+    "start_sec": 172.047,
+    "end_sec": 173.423,
+    "duration_sec": 1.376,
+    "mid_sec": 172.735,
+    "mid_frame_path": "data/processed/frames/frame_00173.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 58,
+    "start_sec": 173.423,
+    "end_sec": 174.925,
+    "duration_sec": 1.501,
+    "mid_sec": 174.174,
+    "mid_frame_path": "data/processed/frames/frame_00175.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 59,
+    "start_sec": 174.925,
+    "end_sec": 177.594,
+    "duration_sec": 2.669,
+    "mid_sec": 176.259,
+    "mid_frame_path": "data/processed/frames/frame_00177.jpg",
+    "n_frames": 3
+  },
+  {
+    "shot_idx": 60,
+    "start_sec": 177.594,
+    "end_sec": 179.596,
+    "duration_sec": 2.002,
+    "mid_sec": 178.595,
+    "mid_frame_path": "data/processed/frames/frame_00179.jpg",
+    "n_frames": 3
+  },
+  {
+    "shot_idx": 61,
+    "start_sec": 179.596,
+    "end_sec": 181.973,
+    "duration_sec": 2.377,
+    "mid_sec": 180.785,
+    "mid_frame_path": "data/processed/frames/frame_00181.jpg",
+    "n_frames": 3
+  },
+  {
+    "shot_idx": 62,
+    "start_sec": 181.973,
+    "end_sec": 183.392,
+    "duration_sec": 1.418,
+    "mid_sec": 182.683,
+    "mid_frame_path": "data/processed/frames/frame_00183.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 63,
+    "start_sec": 183.392,
+    "end_sec": 185.519,
+    "duration_sec": 2.127,
+    "mid_sec": 184.455,
+    "mid_frame_path": "data/processed/frames/frame_00185.jpg",
+    "n_frames": 3
+  },
+  {
+    "shot_idx": 64,
+    "start_sec": 185.519,
+    "end_sec": 189.981,
+    "duration_sec": 4.463,
+    "mid_sec": 187.75,
+    "mid_frame_path": "data/processed/frames/frame_00188.jpg",
+    "n_frames": 5
+  },
+  {
+    "shot_idx": 65,
+    "start_sec": 189.981,
+    "end_sec": 191.817,
+    "duration_sec": 1.835,
+    "mid_sec": 190.899,
+    "mid_frame_path": "data/processed/frames/frame_00191.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 66,
+    "start_sec": 191.817,
+    "end_sec": 198.949,
+    "duration_sec": 7.132,
+    "mid_sec": 195.383,
+    "mid_frame_path": "data/processed/frames/frame_00196.jpg",
+    "n_frames": 8
+  },
+  {
+    "shot_idx": 67,
+    "start_sec": 198.949,
+    "end_sec": 200.492,
+    "duration_sec": 1.543,
+    "mid_sec": 199.72,
+    "mid_frame_path": "data/processed/frames/frame_00200.jpg",
+    "n_frames": 2
+  },
+  {
+    "shot_idx": 68,
+    "start_sec": 200.492,
+    "end_sec": 204.037,
+    "duration_sec": 3.545,
+    "mid_sec": 202.265,
+    "mid_frame_path": "data/processed/frames/frame_00203.jpg",
+    "n_frames": 4
+  },
+  {
+    "shot_idx": 69,
+    "start_sec": 204.037,
+    "end_sec": 208.208,
+    "duration_sec": 4.171,
+    "mid_sec": 206.123,
+    "mid_frame_path": "data/processed/frames/frame_00207.jpg",
+    "n_frames": 5
+  },
+  {
+    "shot_idx": 70,
+    "start_sec": 208.208,
+    "end_sec": 213.13,
+    "duration_sec": 4.922,
+    "mid_sec": 210.669,
+    "mid_frame_path": "data/processed/frames/frame_00211.jpg",
+    "n_frames": 5
+  },
+  {
+    "shot_idx": 71,
+    "start_sec": 213.13,
+    "end_sec": 215.34,
+    "duration_sec": 2.211,
+    "mid_sec": 214.235,
+    "mid_frame_path": "data/processed/frames/frame_00215.jpg",
+    "n_frames": 3
+  }
+]

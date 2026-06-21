@@ -1,0 +1,24 @@
+{
+  "total_shots": 72,
+  "cuts_on_beat": 34,
+  "cuts_on_beat_pct": 47.2,
+  "shots_with_lyrics": 11,
+  "shots_with_lyrics_pct": 15.3,
+  "total_lyric_segments": 5,
+  "total_lyric_chars": 281,
+  "avg_music_rms": 0.31935,
+  "clap_mood_tags": [
+    "happy and bright",
+    "sad and melancholic",
+    "aggressive and intense",
+    "romantic and tender",
+    "triumphant and epic",
+    "calm and peaceful",
+    "tense and anxious",
+    "dreamy and ethereal",
+    "dark and ominous",
+    "playful and whimsical",
+    "lonely and introspective",
+    "powerful and confident"
+  ]
+}

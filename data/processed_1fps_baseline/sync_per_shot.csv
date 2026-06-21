@@ -1,0 +1,173 @@
+shot_idx,start_sec,end_sec,duration_sec,vision_caption,vision_camera_from_vlm,vision_emotion,vision_colors,vision_entities,vision_location,vision_lighting,vision_composition,camera_motion,camera_pan_score,camera_tilt_score,camera_zoom_score,audio_top_mood,audio_mood_happy and bright,audio_mood_sad and melancholic,audio_mood_aggressive and intense,audio_mood_romantic and tender,audio_mood_triumphant and epic,audio_mood_calm and peaceful,audio_mood_tense and anxious,audio_mood_dreamy and ethereal,audio_mood_dark and ominous,audio_mood_playful and whimsical,audio_mood_lonely and introspective,audio_mood_powerful and confident,music_avg_rms,music_n_beats,cut_on_beat,n_lyric_segments,lyric_text
+0,0.0,2.836,2.836,A silhouetted figure with long hair is captured,static,energetic,"yellow, brown, black","person, wall, light, square openings, floor, ceiling","This scene is **indoor**.
+
+Setting description: **",Dramatic warm backlighting,Full body wide shot,handheld,-0.029,0.443,-0.089,powerful and confident,0.1572,0.0005,0.0003,0.0044,0.0003,0.0001,0.0038,0.0019,0.0354,0.0445,0.0,0.2458,0.0945,6,False,1,Deep down you want me
+1,2.836,5.214,2.378,"A woman with long, wet dark hair tilts her",dolly,sensual or blissful,"brown, black, tan","woman, hair, earring, wall, water droplets","Based on the image, this scene is **indoor**.",Dramatic warm spotlight,low-angle close-up portrait,tilt-up,-0.511,0.35,-0.014,powerful and confident,0.0826,0.0007,0.0002,0.0027,0.0002,0.0001,0.0067,0.0013,0.0197,0.0224,0.0,0.1241,0.27074,8,True,0,
+2,5.214,6.59,1.376,"A person in an intricate, shimmering gold filigree costume is",tilt,neutral,"black, gold, brown","person, ornate jewelry, golden light, water droplets, hand, arm","Based on the image, this scene is **",Warm golden backlight.,Close-up torso side view,pan-left,-0.495,0.116,0.007,tense and anxious,0.008,0.0008,0.0001,0.0011,0.0,0.0002,0.0096,0.0008,0.004,0.0003,0.0,0.0024,0.32771,4,False,0,
+3,6.59,9.343,2.753,A silhouetted figure with long hair crouches against,dolly,anxious,"black, orange, brown","Person, cave walls, light, smoke, ground","This scene is indoor. Dark, rocky cave interior",Dramatic warm backlighting,Silhouetted figure in cave,static,-0.037,0.009,-0.005,tense and anxious,0.008,0.0008,0.0001,0.0011,0.0,0.0002,0.0096,0.0008,0.004,0.0003,0.0,0.0024,0.29932,8,False,0,
+4,9.343,11.136,1.793,"A woman with long, dark hair looks over her bare shoulder",static,contemplative,"black, brown, tan","woman, hair, face, shoulder, background","This scene is indoor.
+
+Setting description:",warm golden studio light,close-up portrait shot,pan-left,-0.715,0.359,-0.532,powerful and confident,0.1126,0.0007,0.0005,0.0012,0.0,0.0001,0.0064,0.002,0.0055,0.0007,0.0001,0.1799,0.31639,7,False,0,
+5,11.136,15.182,4.046,"A woman with long, dark wavy hair and dramatic",handheld,contemplative,"black, brown, white","woman, hair, hand, earring, wall, light openings","This scene is indoor.
+
+Setting description: Dimly",warm golden backlighting,close-up face shot,pan-right,0.223,-0.131,0.152,powerful and confident,0.1503,0.0005,0.0008,0.001,0.0,0.0001,0.0026,0.0023,0.0051,0.0013,0.0001,0.3789,0.3197,10,False,1,Dictive baby what you want me to do not a quick fix one hit my room when you have less than a less than you
+6,15.182,17.392,2.21,A silhouetted figure with long hair crouches,dolly,fearful/anxious,"black, orange, yellow","person, rock walls, light, smoke, ground","This scene is indoor.
+
+Setting description: Dark,",warm hazy golden backlighting,narrow vertical framed shot,static,0.0,0.0,0.0,powerful and confident,0.0835,0.0003,0.0008,0.0006,0.0,0.0001,0.0019,0.0015,0.0032,0.0013,0.0002,0.4002,0.27563,7,False,1,Dictive baby what you want me to do not a quick fix one hit my room when you have less than a less than you
+7,17.392,22.189,4.797,"A woman with long, dark wavy hair and a direct",handheld,sultry,"black, brown, tan","woman, hair, hand, top, wall","This scene is **indoor**.
+
+Setting description",dim warm golden light,over-shoulder close-up shot,pan-left,-0.116,-0.193,0.253,powerful and confident,0.1141,0.0002,0.0015,0.0005,0.0,0.0001,0.0011,0.0014,0.0025,0.0032,0.0002,0.3796,0.27781,12,True,2,Dictive baby what you want me to do not a quick fix one hit my room when you have less than a less than you | Don't need to learn when you're playing with fire. You're begging to find out
+8,22.189,23.774,1.585,"A woman with long, dark, wavy hair tilts her head",handheld,confident,"black, brown, white","woman, long hair, earring, wall, light patterns","This scene is indoor.
+
+Setting description: Warmly lit",warm golden natural light,close-up tilted face shot,zoom-out,-0.09,-0.228,1.0,powerful and confident,0.1446,0.0001,0.0022,0.0004,0.0001,0.0,0.0004,0.0014,0.0019,0.005,0.0001,0.359,0.29478,4,True,2,Don't need to learn when you're playing with fire. You're begging to find out | You're safe save her the heartbreak. There's a sweet change
+9,23.774,26.86,3.086,An extreme close-up shows a woman with,handheld,"intense, seductive","black, orange, brown","Woman, hair, eye, earring, water droplets, golden light","This scene is outdoor.
+
+**Setting description:** Golden hour",warm golden glow,extreme close-up face shot,tilt-up,0.487,-0.736,-0.611,powerful and confident,0.0953,0.0001,0.0025,0.0005,0.0001,0.0,0.0006,0.0009,0.0016,0.0033,0.0001,0.4585,0.27063,8,False,1,You're safe save her the heartbreak. There's a sweet change
+10,26.86,29.821,2.961,A silhouetted figure with long hair stands within a narrow,dolly,contemplative,"black, white, orange","person, rock walls, bright light, mist, silhouette","This scene is **indoor** (specifically, inside",Warm golden backlighting.,backlit medium silhouette shot,static,0.183,0.333,0.333,powerful and confident,0.0459,0.0001,0.0028,0.0006,0.0001,0.0,0.0008,0.0004,0.0013,0.0016,0.0001,0.558,0.2603,9,False,1,You're safe save her the heartbreak. There's a sweet change
+11,29.821,31.24,1.419,"A woman with long, dark, wavy hair",handheld,confident,"black, brown, tan","woman, hair, shoulder, wall, light patterns","This scene is indoor.
+
+**Setting description:** Dim",warm golden dramatic lighting,close-up face shot,tilt-up,-0.627,0.0,-0.245,powerful and confident,0.051,0.0002,0.004,0.0005,0.0001,0.0001,0.0023,0.0006,0.0019,0.0021,0.0001,0.4402,0.27938,6,True,2,"You're safe save her the heartbreak. There's a sweet change | No, it's not safe"
+12,31.24,32.532,1.292,A woman with long dark hair and pink nails poses against a,zoom-in,"confident, seductive","white, black, brown","Woman, bikini top, jeans, jewelry, wall, hair","This scene is indoor.
+
+Setting description: Plain, textured",bright golden sunlight,over-shoulder medium shot,static,0.0,0.0,0.0,powerful and confident,0.056,0.0002,0.0052,0.0004,0.0,0.0001,0.0039,0.0007,0.0024,0.0026,0.0002,0.3224,0.33042,4,True,1,"No, it's not safe"
+13,32.532,35.41,2.878,A close-up shot from behind shows a dancer',handheld,neutral,"gold, brown, black","Woman, glitter, costume, skin, hair","This scene is indoor.
+
+Setting description: Dark, golden",Warm golden stage light.,Close-up back view,zoom-in,-0.081,-0.279,-0.332,powerful and confident,0.2143,0.0004,0.0038,0.0005,0.0001,0.0001,0.0061,0.0035,0.0027,0.0062,0.0002,0.2299,0.35785,9,True,1,"No, it's not safe"
+14,35.41,37.913,2.503,"A woman with long, dark hair and a short white dress",dolly,seductive or confident,"yellow, black, white","woman, dress, cave walls, golden light, long hair","This scene is **indoor**.
+
+**Setting description:** Dim",warm golden backlit glow,"medium shot, side profile",zoom-in,0.274,0.3,-0.609,happy and bright,0.3726,0.0006,0.0025,0.0007,0.0001,0.0002,0.0082,0.0062,0.0029,0.0099,0.0002,0.1375,0.33499,6,True,1,"No, it's not safe"
+15,37.913,39.915,2.002,"A woman with long, dark hair poses provocatively",handheld,sultry,"black, brown, white","woman, hair, hand, face, wall, light openings","Based on the image, the scene is",Warm golden backlit glow,close-up over-shoulder portrait,tilt-down,-0.573,0.315,-0.216,happy and bright,0.3726,0.0006,0.0025,0.0007,0.0001,0.0002,0.0082,0.0062,0.0029,0.0099,0.0002,0.1375,0.34222,6,False,0,
+16,39.915,47.589,7.674,"A woman with long, dark, disheveled hair",zoom-in,intense gaze,"black, brown, white","woman, long dark hair, light-colored top, cave walls, shadows, warm light","This scene is indoor.
+
+Setting description: Dim",warm golden cave light,Medium shot of woman,pan-right,0.023,0.029,0.055,happy and bright,0.3482,0.0006,0.0028,0.001,0.0002,0.0001,0.0063,0.0048,0.0031,0.005,0.0002,0.3017,0.35583,19,False,0,
+17,47.589,49.633,2.044,"A young woman with long, dark wavy",handheld,joyful,"black, brown, tan","Woman, hair, earring, teeth, background","Based on the lighting and background,",warm golden glow,close-up of face,pan-right,0.619,0.365,-0.697,powerful and confident,0.3472,0.001,0.0021,0.0014,0.0002,0.0001,0.005,0.0055,0.0029,0.0007,0.0003,0.425,0.36483,6,False,0,
+18,49.633,51.593,1.96,"A woman with long, dark hair and an eyebrow piercing",handheld,intense,"beige, black, white","woman, off-the-shoulder top, wall, background wall, square openings","Based on the image, this scene is **indoor**.",warm sepia-toned interior light,medium shot portrait,tilt-down,-0.315,0.22,1.0,powerful and confident,0.3247,0.0007,0.0022,0.0013,0.0003,0.0001,0.0055,0.005,0.0029,0.0013,0.0002,0.402,0.36489,7,True,0,
+19,51.593,56.306,4.713,"A woman with long, wavy blonde hair poses in",dolly,neutral,"beige, white, gold","woman, bikini top, fringed pants, concrete wall, doorway, crack, bright light source","This scene is indoor.
+
+**Setting",soft warm backlighting,medium shot of woman,tilt-up,0.379,-0.513,-0.264,happy and bright,0.3612,0.0006,0.0028,0.0014,0.0003,0.0001,0.0075,0.004,0.0034,0.0019,0.0002,0.3184,0.37912,13,True,0,
+20,56.306,61.728,5.422,"A woman with long, dark hair and braided details gazes",handheld,"intense, fierce","black, yellow, brown","woman, hair, top, light source, shadows","This scene is indoor.
+
+**Setting","warm, dramatic backlighting","medium shot, high angle",zoom-out,0.142,-0.144,0.296,happy and bright,0.3116,0.0008,0.0037,0.0014,0.0003,0.0003,0.0159,0.0036,0.0089,0.0028,0.0003,0.1919,0.33887,13,True,0,
+21,61.728,63.272,1.544,"A woman with long, dark hair and a light-",pan,contemplative,"brown, black, white","woman, long hair, light-colored outfit, textured wall, bright doorway, sandy floor","This scene is indoor.
+
+Setting",warm golden backlight,medium shot side profile,pan-left,-0.339,-0.576,0.28,happy and bright,0.2031,0.0009,0.004,0.0014,0.0002,0.0004,0.0228,0.0037,0.0139,0.0035,0.0005,0.1258,0.3274,6,False,0,
+22,63.272,65.732,2.46,"A woman with long, dark, wavy hair is captured",handheld,contemplative,"black, brown, tan","woman, hair, face, earring, clothing, background","Based on the lighting and background, this",dim warm moody lighting,tight close-up face,tilt-up,-0.659,0.0,0.161,happy and bright,0.2714,0.0025,0.0035,0.0023,0.0001,0.0005,0.027,0.0068,0.0099,0.0035,0.0004,0.191,0.35154,6,True,0,
+23,65.732,67.15,1.418,"Two women, one with long blonde waves and the other with",handheld,intimate,"gold, black, brown","two women, gold bikini tops, blonde hair, dark hair, necklace, warm lighting",Indoor. Warmly lit intimate space.,Dim warm golden glow,close-up two-shot,tilt-up,-0.107,-0.462,-0.212,happy and bright,0.3397,0.0041,0.0029,0.0032,0.0001,0.0007,0.0312,0.0099,0.0058,0.0035,0.0004,0.2562,0.37293,7,False,0,
+24,67.15,70.362,3.212,A woman with long dark hair performs a dynamic dance pose,zoom-in,Soulful*: Fits the vibe of the dance and lighting.,"brown, white, black","woman, dress, sand, walls, doorway","This scene is indoor.
+
+Setting description: Sandy, rustic",warm golden backlight,Medium wide action shot,static,-0.333,0.333,-0.196,happy and bright,0.2996,0.0024,0.0025,0.0023,0.0001,0.0004,0.0278,0.0057,0.0058,0.0069,0.0003,0.1708,0.35806,8,False,0,
+25,70.362,71.822,1.46,"Two women lean against textured, light-colored walls flanking a",zoom-in,contemplative,"white, tan, black","Blonde woman, dark-haired woman,","This scene is indoor.
+
+Setting description:",Bright golden hazy light,medium shot two women,tilt-down,-0.16,1.0,1.0,happy and bright,0.2596,0.0006,0.002,0.0013,0.0001,0.0002,0.0244,0.0016,0.0059,0.0102,0.0001,0.0854,0.41418,4,True,0,
+26,71.822,76.827,5.005,"A blonde woman with long, wavy hair stands in a dark",dolly,seductive,"white, black, blue","woman, white dress, waterfall, rocks, mist","This scene is **outdoor**.
+
+**",Bright cool backlighting,"medium shot, centered subject",pan-left,-0.166,0.1,-0.023,happy and bright,0.3366,0.0005,0.0016,0.001,0.0001,0.0001,0.013,0.0026,0.0038,0.0076,0.0001,0.1606,0.3312,12,True,0,
+27,76.827,79.788,2.961,"A woman with long, light-colored hair reclines",handheld,distressed,"black, white, blue","woman, blonde hair, white dress,","This scene is **indoor** (specifically,",Dramatic ethereal side lighting,high-angle medium shot.,pan-left,-0.107,-0.211,0.175,happy and bright,0.4135,0.0004,0.0012,0.0006,0.0001,0.0001,0.0017,0.0036,0.0017,0.005,0.0001,0.2359,0.29054,8,True,0,
+28,79.788,81.665,1.877,"A woman with long, wavy blonde hair",handheld,neutral,"white, black, brown","woman, long blonde hair, rock face, light, smoke, draped clothing","This scene is indoor.
+
+Setting description: Misty,",Bright backlit hazy glow,backlit medium profile shot,pan-right,0.053,0.038,0.744,happy and bright,0.3066,0.0004,0.0033,0.0008,0.0002,0.0001,0.0036,0.0066,0.0031,0.0033,0.0001,0.2434,0.31919,6,False,0,
+29,81.665,84.084,2.419,"A woman with long, wavy hair is captured",handheld,joyful,"white, black, brown","woman, white dress, long hair, bright light, dark background","This scene appears to be indoor.
+
+Setting description:",Bright white backlighting,medium shot of woman,zoom-in,0.444,0.026,-0.623,powerful and confident,0.1997,0.0004,0.0053,0.0011,0.0003,0.0,0.0055,0.0096,0.0045,0.0017,0.0001,0.251,0.29479,8,True,0,
+30,84.084,86.67,2.586,Two women in gold bikini tops are dancing against,handheld,joyful,"white, brown, black","blonde woman, dark-haired woman, bikini tops, wall, long hair, fingernails","Based on the image, this scene appears to be **indoor",bright golden sunlight,medium shot two women,pan-right,0.0,0.042,-0.572,powerful and confident,0.1367,0.0003,0.0037,0.0009,0.0002,0.0,0.0048,0.0066,0.0034,0.0017,0.0001,0.2346,0.26598,7,True,0,
+31,86.67,88.046,1.376,"A woman with long, backlit blonde hair stands in a",pan,contemplative,"white, black, blue","woman, long hair, white garment, waterfall, rocks, mist","This scene is **outdoor**.
+
+**Setting description:** Dark",Bright ethereal backlighting,backlit medium shot figure,tilt-down,0.617,0.851,0.632,powerful and confident,0.0736,0.0003,0.0021,0.0008,0.0002,0.0,0.0041,0.0036,0.0023,0.0018,0.0001,0.2181,0.28166,6,False,0,
+32,88.046,94.845,6.799,"A woman with long, light-colored hair leans back",tracking,distressed,"black, white, brown","woman, blonde hair, rock, arm, white strap,","This scene is indoor.
+
+Setting description: Dark, rocky",Dramatic backlit cave scene,low-angle medium profile shot,pan-left,-0.093,-0.085,0.228,powerful and confident,0.117,0.0003,0.004,0.0006,0.0001,0.0001,0.0036,0.003,0.0029,0.0082,0.0002,0.2332,0.32276,15,False,0,
+33,94.845,96.722,1.877,"A woman with long, flowing blonde hair stands in a dark",static,contemplative,"black, white, blue","Woman, long blonde hair, white dress, rocks, bright light, mist","This scene is outdoor.
+
+Setting description: Dark, misty",bright ethereal backlighting,medium shot woman profile,tilt-up,-0.535,-0.481,-0.352,powerful and confident,0.2286,0.0004,0.0045,0.0005,0.0001,0.0001,0.0037,0.0025,0.0028,0.0152,0.0003,0.2353,0.33043,6,True,0,
+34,96.722,99.725,3.003,A blonde woman in a revealing white outfit stands centered in a,dolly,intense,"white, black, blue","woman, blonde hair, white dress, waterfall, rocks, cave","This scene is **outdoor**.
+
+Setting description: **",bright ethereal backlighting,"Medium shot, centered framing",tilt-down,0.016,0.132,0.59,happy and bright,0.2969,0.0004,0.003,0.0007,0.0001,0.0001,0.0043,0.0026,0.0022,0.0159,0.0002,0.2222,0.34735,9,True,0,
+35,99.725,101.768,2.043,"A woman with long, wavy blonde hair and dramatic dark eye",zoom-in,neutral,"black, blonde, white","woman, blonde hair, eyes, lips, white clothing, dark background, light flare","Based on the image, this scene is **indoor**.",bright cool backlighting,Close-up portrait shot,tilt-down,0.878,0.95,0.407,happy and bright,0.4078,0.0003,0.0028,0.0009,0.0004,0.0001,0.0071,0.0021,0.0035,0.0212,0.0002,0.1629,0.35201,6,True,0,
+36,101.768,106.648,4.88,A blonde woman in a gold bikini and a long,handheld,confident,"white, tan, yellow","woman, bikini, necklace, walls, yellow nail polish","This scene is indoor.
+
+Brightly lit studio",bright golden backlight,medium shot waist up,zoom-in,-0.145,-0.249,0.167,happy and bright,0.4167,0.0005,0.0032,0.001,0.0004,0.0001,0.0077,0.005,0.0043,0.0145,0.0003,0.1804,0.35246,13,False,0,
+37,106.648,108.358,1.71,"A woman with long, dark hair stands with her back",handheld,neutral,"white, black, grey","woman, long dark hair, gold top, unbuttoned jeans, wall, shadows","Based on the image, this scene",warm golden glow,medium waist-up shot,zoom-out,-0.694,-0.724,0.914,happy and bright,0.3147,0.0007,0.0039,0.0009,0.0002,0.0001,0.0056,0.0083,0.0039,0.0025,0.0005,0.2571,0.35758,6,True,0,
+38,108.358,111.695,3.337,"Two women pose confidently in a sandy, desert-",static,confident,"beige, brown, black","two women, bikini tops, pants, sand, dry branches, wall, square openings","Based on the image, this scene is **indoor**.",Bright warm golden light,Medium shot of subjects,tilt-up,0.049,-0.575,-0.667,powerful and confident,0.2768,0.0006,0.0027,0.0008,0.0002,0.0001,0.006,0.0067,0.0028,0.0019,0.0003,0.3006,0.36895,9,False,0,
+39,111.695,113.322,1.627,Two people are silhouetted as they dance,dolly,joyful,"yellow, brown, black","man, woman, wall, light, holes, grid openings","This scene is indoor.
+
+Setting description: **",warm golden backlighting,wide backlit silhouette shot,tilt-down,-0.173,0.387,-0.322,powerful and confident,0.239,0.0004,0.0016,0.0006,0.0001,0.0001,0.0064,0.0052,0.0018,0.0014,0.0002,0.344,0.399,7,False,0,
+40,113.322,121.58,8.258,"Two women, one with long dark",static,sensual performance,"tan, gold, brown","woman with dark hair, woman with blonde hair, bikini tops","This scene is indoor.
+
+Setting description",warm golden interior lighting,medium full shot subjects,zoom-in,-0.124,0.073,-0.074,powerful and confident,0.2159,0.0006,0.0022,0.001,0.0001,0.0003,0.0104,0.0032,0.0065,0.0039,0.0003,0.266,0.34533,19,True,0,
+41,121.58,122.873,1.293,A woman with long dark hair in a light-colored outfit,static,intense,"beige, brown, black","woman, sand, walls, lattice window, branches, wooden beams","This scene is indoor.
+
+Setting description: **Sun",Bright desert sunlight interior,wide shot centered subject,zoom-in,-0.195,0.103,-0.599,happy and bright,0.2623,0.001,0.0018,0.0012,0.0001,0.0006,0.0162,0.0017,0.0126,0.0076,0.0004,0.2206,0.36581,4,False,0,
+42,122.873,130.839,7.966,A woman with long hair is silhouetted,dolly,confident,"brown, yellow, black","woman, wall, square openings, light, room","This scene is indoor.
+
+**Setting description:** Silhouette against",warm golden backlighting,backlit medium silhouette shot,zoom-in,-0.117,0.133,-0.092,powerful and confident,0.2621,0.0016,0.0029,0.0016,0.0001,0.0004,0.015,0.004,0.0068,0.0043,0.0004,0.387,0.35772,19,False,0,
+43,130.839,133.008,2.169,"A woman in a short, dark dress and tall brown",dolly,neutral,"black, white, brown","woman, dress, boots, bracelet, cave, rocks, light","This scene is **indoor** (specifically, inside a cave",bright backlit cave opening,Wide full body shot,zoom-out,-0.18,0.035,-0.133,powerful and confident,0.1616,0.0007,0.0052,0.0009,0.0001,0.0002,0.0069,0.0041,0.0029,0.0023,0.0003,0.5671,0.34535,8,True,0,
+44,133.008,135.385,2.377,"A woman with long blonde hair and a bare torso stands with her arms raised in a room with light-colored walls. She is wearing tan, textured pants and appears to be in motion or posing.",pan,Confident or energetic.,"beige, brown, white","woman, bikini top, fringed pants, wall","This scene is indoor.
+
+Setting description: Plain indoor room",Dim warm interior light.,medium wide shot,zoom-in,0.147,-0.323,-0.259,powerful and confident,0.182,0.0008,0.0037,0.001,0.0001,0.0001,0.0057,0.0035,0.0035,0.0021,0.0003,0.4302,0.31497,6,False,0,
+45,135.385,138.096,2.711,A woman in a dark dress and gold jewelry sits posed,zoom-in,confident,"black, white, brown","woman, cave, rocks, water, dress","This scene is **indoor** (specifically, inside a cave",Dramatic cave spotlight.,wide full body shot,pan-right,0.903,-0.161,0.149,powerful and confident,0.2025,0.0009,0.0023,0.0011,0.0001,0.0001,0.0044,0.0029,0.004,0.0019,0.0002,0.2932,0.28099,8,True,0,
+46,138.096,139.431,1.335,"A woman with long, dark hair and a",zoom-in,contemplative,"beige, white, brown","woman, tree branch, sand, concrete walls, breeze block window, bright light","This scene is indoor.
+
+**Setting description:** Sandy,",Bright hazy golden light,medium full shot center-framed,tilt-down,-0.251,0.932,0.756,powerful and confident,0.2025,0.0009,0.0023,0.0011,0.0001,0.0001,0.0044,0.0029,0.004,0.0019,0.0002,0.2932,0.27712,4,False,0,
+47,139.431,143.101,3.67,Two topless women stand with their backs to the camera,handheld,confident or powerful,"yellow, black, brown","Two women, grid wall, light, pants, concrete room, holes","This scene is **indoor**.
+
+Setting",warm golden backlighting,low-angle full shot silhouette,pan-right,0.364,0.302,0.218,powerful and confident,0.2828,0.0006,0.002,0.0012,0.0001,0.0001,0.0034,0.0031,0.0035,0.0041,0.0002,0.3279,0.31083,11,False,0,
+48,143.101,144.478,1.377,"A woman with wet, dark hair is captured in a warm",tilt,neutral,"brown, gold, black","person, hair, arm, gold top, rock","This scene is indoor.
+
+Setting description: Dim",Warm golden hazy glow.,extreme close-up torso shot,pan-left,-1.0,0.722,-0.145,happy and bright,0.3631,0.0004,0.0017,0.0013,0.0001,0.0001,0.0025,0.0033,0.003,0.0063,0.0001,0.3625,0.26304,5,True,0,
+49,144.478,147.522,3.044,"A person with long, dark, flowing",```handheld```,joyful,"black, gold, brown","person, arm, glitter, hair, gold dress, background lights","This scene is indoor.
+
+Setting description",warm golden glow,Close-up arm and shoulder,pan-right,0.62,0.551,0.23,powerful and confident,0.3545,0.0003,0.0018,0.0011,0.0001,0.0001,0.0019,0.0024,0.0019,0.0054,0.0001,0.3592,0.29639,8,True,0,
+50,147.522,149.775,2.253,"A woman with long, dark hair and shimmering skin looks over",zoom-in,Sultry or confident.,"gold, black, brown","woman, long dark hair, rock wall, glitter","Based on the image, this scene appears to be",warm golden glow,Over-shoulder medium close-up,tilt-up,-0.604,-1.0,0.68,powerful and confident,0.3458,0.0002,0.0019,0.0008,0.0001,0.0001,0.0013,0.0015,0.0008,0.0045,0.0001,0.3559,0.31759,6,False,0,
+51,149.775,154.488,4.713,A woman with long black hair and side braids poses against,handheld,sensual,"white, black, tan","woman, bikini top, jeans, long hair, wall","Based on the image, this scene is **outdoor",Bright warm natural light,medium shot of woman,tilt-down,-0.072,0.437,-0.022,powerful and confident,0.2102,0.0003,0.0056,0.0007,0.0001,0.0001,0.0028,0.0016,0.0019,0.0035,0.0002,0.3415,0.35512,12,True,0,
+52,154.488,155.864,1.376,"A woman with long, dark hair and a gold bandeau",static,sultry intense,"brown, tan, black","woman, long dark hair, gold top, grid wall, branches, sand, fringed fabric","This scene is indoor.
+
+Setting description: Sandy",Warm golden backlighting,"Medium shot, centered subject",tilt-down,-0.006,0.885,0.442,powerful and confident,0.2362,0.0006,0.0055,0.0008,0.0001,0.0002,0.0058,0.0076,0.0025,0.0047,0.0003,0.2515,0.33038,4,True,0,
+53,155.864,159.743,3.879,"A woman with long, dark, wavy hair speckled with glitter",zoom-in,intense gaze,"black, brown, yellow","woman, hair, cave wall, shadow, light source","This scene is indoor.
+
+Setting description: Dimly",Dramatic warm golden backlighting,medium close-up portrait,pan-right,0.61,-0.434,-0.098,happy and bright,0.3978,0.0008,0.0016,0.001,0.0002,0.0001,0.0074,0.0135,0.002,0.0067,0.0003,0.176,0.35423,11,False,0,
+54,159.743,161.078,1.335,A silhouetted woman stands inside a,pan,"energetic, intense","black, white, blue","woman, cave, rocks, waterfall, light,",This scene is **indoor** (inside a cave,Dramatic cool backlighting,Wide shot cave silhouette,pan-left,-0.349,0.133,-0.154,happy and bright,0.3385,0.0005,0.0014,0.0008,0.0002,0.0001,0.0044,0.0072,0.0017,0.0056,0.0002,0.3344,0.37018,6,True,0,
+55,161.078,162.579,1.501,"Two women, one with long blonde hair and the other with",pan,confident performance,"beige, white, brown","woman with blonde hair, woman with dark hair, wall with","This scene is indoor.
+
+Setting description: Ru",warm golden backlighting,wide full body shot,pan-right,1.0,0.022,-1.0,powerful and confident,0.2791,0.0001,0.0013,0.0006,0.0002,0.0001,0.0015,0.0009,0.0014,0.0044,0.0001,0.4927,0.40356,4,False,0,
+56,162.579,172.047,9.468,A silhouetted figure with long hair stands at the,dolly,contemplative,"black, white, grey","woman, cave, water, rocks, light, mist","This scene is **indoor**.
+
+**Setting description:**",Dramatic backlit cave light,Wide shot cave silhouette,tilt-down,-0.084,0.1,0.257,powerful and confident,0.296,0.0005,0.0028,0.0011,0.0003,0.0001,0.0053,0.0029,0.0025,0.0032,0.0002,0.4466,0.37768,23,False,0,
+57,172.047,173.423,1.376,"Two women with long, wavy hair pose",zoom-in,confident or sensual,"beige, black, white","two women, bikini top, pants, wall, hair","This scene is indoor.
+
+**Setting description:** Minimal",Soft warm golden light,"Medium shot, waist up.",pan-left,-1.0,0.915,1.0,powerful and confident,0.2819,0.0007,0.0018,0.001,0.0004,0.0002,0.0091,0.0053,0.0028,0.0015,0.0002,0.4735,0.3555,4,True,0,
+58,173.423,174.925,1.502,"A woman with long, dark wavy hair gazes",handheld,confident,"black, brown, white","woman, hair, shoulder, hand, background wall, light openings","Based on the image, this scene is **indoor",warm golden backlight,close-up face and shoulder,tilt-up,-0.575,-1.0,1.0,powerful and confident,0.2819,0.0007,0.0018,0.001,0.0004,0.0002,0.0091,0.0053,0.0028,0.0015,0.0002,0.4735,0.37824,4,False,0,
+59,174.925,177.594,2.669,"A woman with dark, wind-swept hair looks back",static,seductive,"black, tan, white","woman, hair, face, tongue, shoulder, wall, light","This scene is indoor.
+
+Setting description: Brightly",Bright golden backlighting,close-up face and shoulder,zoom-in,0.517,-0.25,-0.109,powerful and confident,0.3203,0.0007,0.0039,0.0011,0.0003,0.0002,0.0083,0.0046,0.0042,0.0021,0.0002,0.3423,0.36323,9,False,0,
+60,177.594,179.596,2.002,A woman with dark hair and long pink nails looks intensely over,handheld,angry,"black, brown, beige","woman, hair, face, shoulder, hand, pink nails, background wall","Based on the lighting and background, this scene is",harsh warm direct sunlight,"This is accurate.
+    *   """,zoom-in,0.032,0.318,-0.474,happy and bright,0.3587,0.0006,0.0059,0.0012,0.0001,0.0002,0.0076,0.0038,0.0056,0.0026,0.0002,0.211,0.35964,6,False,0,
+61,179.596,181.973,2.377,"A woman with long, dark, wavy hair and",handheld,confident,"black, brown, beige","woman, hair, earring, clothing, wall, light patterns","This scene is indoor.
+
+Setting description:",warm golden studio light,close-up head and shoulders shot,pan-right,0.309,-0.258,-1.0,happy and bright,0.2824,0.0014,0.0038,0.0014,0.0001,0.0007,0.0164,0.0029,0.01,0.0031,0.0004,0.2307,0.33456,7,False,0,
+62,181.973,183.392,1.419,"A woman with long dark hair, wearing a short dark",dolly,contemplative,"black, white, brown","woman, dress, boots, cave, rocks, waterfall, light source","This scene is indoor.
+
+Setting","Moody, high-contrast cave lighting","Accurate.
+    *   ""Wide shot of woman",tilt-up,-0.442,0.0,-0.314,powerful and confident,0.2061,0.0022,0.0017,0.0016,0.0,0.0013,0.0252,0.0019,0.0144,0.0035,0.0006,0.2504,0.34903,7,True,0,
+63,183.392,185.519,2.127,"A woman with long, dark hair stands in silhouette within a",dolly,neutral,"brown, black, orange","woman, cave walls, fire, waterfall","This scene is indoor.
+
+Setting description:",warm golden backlighting,medium shot backlit silhouette,tilt-down,0.428,0.637,-0.06,powerful and confident,0.2371,0.0034,0.0015,0.0034,0.0001,0.0009,0.0309,0.0027,0.0103,0.0037,0.0004,0.2804,0.333,6,True,0,
+64,185.519,189.981,4.462,A silhouetted figure with long hair is captured in,static,joyful,"brown, yellow, black","person, wall, light, openings, holes, floor","Based on the image, this scene is",backlit golden silhouette,Full body silhouette shot,static,0.326,-0.254,0.052,powerful and confident,0.2681,0.0045,0.0012,0.0053,0.0001,0.0005,0.0366,0.0034,0.0062,0.0039,0.0003,0.3105,0.34537,10,False,0,
+65,189.981,191.817,1.836,A blonde woman in a tan bikini top and,handheld,joyful,"beige, white, yellow","woman, blonde hair, bikini top, bikini bottom, wall with openings, branches, background wall","This scene is indoor.
+
+Setting description: Sandy stone room",Bright warm golden light,Medium shot of woman,zoom-in,-0.385,0.011,-0.839,powerful and confident,0.2046,0.0063,0.0019,0.0067,0.0002,0.0008,0.0438,0.0045,0.0238,0.0023,0.0006,0.3422,0.36863,6,False,0,
+66,191.817,198.949,7.132,"A woman with long, backlit hair",tilt,joyful,"black, white, blue","woman, waterfall, rocks, water spray, white dress","This scene is outdoor.
+
+Setting",bright cool backlighting,Medium silhouette waterfall shot,zoom-in,-0.022,-0.003,-0.523,powerful and confident,0.1171,0.0047,0.0015,0.0048,0.0001,0.0006,0.0312,0.0037,0.0269,0.0008,0.0005,0.2705,0.2965,17,False,0,
+67,198.949,200.492,1.543,Two people are dancing closely together in a dimly lit,handheld,passionate,"tan, black, beige","people, dark pants, patterned pants, hands, yellow fingernails, wall","This scene is indoor.
+
+Setting",Soft warm golden glow,close-up midsection shot,zoom-out,-0.427,-0.538,0.034,powerful and confident,0.0624,0.0008,0.0006,0.0018,0.0,0.0001,0.0076,0.001,0.0075,0.0014,0.0001,0.0964,0.25089,6,True,0,
+68,200.492,204.037,3.545,"A woman in a flowing, light-colored bodysuit stands",pan,contemplative,"beige, white, brown","woman, dress, wall, openings, log, light, floor","Based on the image, this scene is **",bright hazy golden light,full body wide shot,zoom-out,-0.813,0.106,0.236,happy and bright,0.0317,0.0004,0.0009,0.002,0.0,0.0001,0.0037,0.0002,0.0026,0.0019,0.0,0.0257,0.23532,10,False,0,
+69,204.037,208.208,4.171,"A person with long, dark, wavy hair and an open",handheld,passionate,"black, gold, brown","woman, long dark hair, open mouth, gold choker, sparkles, background texture","This scene is indoor.
+
+Setting description: Dark",warm golden glow,Close-up face and neck,pan-left,-0.412,0.04,-0.485,powerful and confident,0.0342,0.0019,0.0006,0.0026,0.0001,0.0001,0.0179,0.0015,0.0148,0.0013,0.0001,0.0377,0.27193,11,True,0,
+70,208.208,213.13,4.922,"Two women dance closely together in a rustic, sunlit",pan,passionate energy,"beige, black, yellow","Woman with dark hair, woman with blonde hair, yellow","This scene is indoor.
+
+Setting description: Weathered,",warm golden sunlight,medium shot of two women,zoom-in,0.226,-0.327,-0.546,powerful and confident,0.0187,0.0025,0.0012,0.0033,0.0001,0.0002,0.022,0.0051,0.0411,0.0005,0.0002,0.0838,0.19117,6,True,0,
+71,213.13,215.34,2.21,"The image features the stylized text ""A*POP"" in",static,No people.,"black, pink, white","""A*POP"" text, letter A, star symbol, letter P, letter O, black background","This scene is indoor.
+
+Setting description: Pink",vibrant pink highlights contrast,Centered graphic on black.,static,0.0,0.0,0.0,powerful and confident,0.0008,0.0016,0.002,0.0035,0.0001,0.0003,0.012,0.0074,0.0553,0.0002,0.0003,0.1178,1e-05,0,False,0,

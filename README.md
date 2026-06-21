@@ -16,19 +16,59 @@ Designed to be:
 ## Current results
 
 **Video analyzed:** Tyla — *SHE DID IT AGAIN* feat. Zara Larsson
-(3:35, 215 frames @ 1fps, 17.4 MB, YouTube ID `rtwpk9rb1Dc`)
+(3:35, 431 frames @ 2 fps, 17.4 MB, YouTube ID `rtwpk9rb1Dc`)
 
 | Stream | Result |
 |---|---|
 | Shot detection (PySceneDetect ContentDetector, threshold=35) | **72 shots** (avg 3.0s, min 1.3s, max 9.5s) |
-| Vision captions (Gemini 3 Flash via cloud) | 72/72 successful |
-| Camera motion (OpenCV optical flow) | static / tilt-down / pan-left classified |
+| Vision captions (Gemini 3 Flash via cloud) | 72/72 successful (576 API calls) |
+| Camera motion (OpenCV optical flow @ 2 fps) | tilt-down 20, static 14, pan-right 10, pan-left 9, tilt-up 7, zoom-out 7, zoom-in 5 |
 | Lyrics (faster-whisper small.en) | 5 segments, 281 chars |
 | Audio mood (CLAP, 27 tags) | "powerful and confident" dominant |
 | Music structure (librosa) | 129.2 BPM, B minor, 444 beats |
-| Cuts on beat (±100ms) | see `reports/dashboard.html` |
+| Cuts on beat (±100ms) | **47.2%** (34/72) |
 
 Open `reports/dashboard.html` to explore.
+
+### 1 fps vs 2 fps — what changed?
+
+The pipeline was first run with **1 fps**, then re-run with **2 fps**.
+Here's what the change in frame rate actually changed in the results:
+
+| Phase | At 1 fps | At 2 fps | Why it changed |
+|---|---|---|---|
+| 0 (frames) | 215 frames | 431 frames | 2× the data, 2× the disk |
+| 1 (shots) | 72 shots | 72 shots | Reads video directly, not frames |
+| 2 (vision) | 72 captions | 72 captions (re-run) | Same 1 mid-frame per shot |
+| 3 (camera) | zoom-in 13, tilt-down 12, tilt-up 11, pan-left 11, pan-right 11, static 7, zoom-out 6, handheld 1 | **tilt-down 20, static 14, pan-right 10, pan-left 9, tilt-up 7, zoom-out 7, zoom-in 5** | Optical flow sees 2× the frame pairs |
+| 4 (whisper) | 5 segments | 5 segments | Audio rate unchanged |
+| 5 (CLAP) | "powerful and confident" | "powerful and confident" | Audio rate unchanged |
+| 6 (librosa) | 129.2 BPM, B minor | 129.2 BPM, B minor | Audio rate unchanged |
+| 7 (cuts on beat) | 47.2% (34/72) | 47.2% (34/72) | Beat timestamps unchanged |
+
+**Phase 3 changed the most.** At 1 fps, the dominant motion was `zoom-in`
+(13 shots) — frames 1 second apart often have a different center-of-mass
+which the algorithm reads as radial divergence (zoom). At 2 fps, frames
+0.5s apart are more often true pans/tilts, so we see `tilt-down` (20)
+and `static` (14) dominate. The 1 fps distribution was likely noisy:
+**the 2 fps result is more trustworthy**.
+
+The 1 fps baseline is preserved in `data/processed_1fps_baseline/` for
+diffing.
+
+**Lessons learned:**
+- Audio-only phases (4, 5, 6) are **completely unaffected** by frame
+  rate. They depend on the audio track, not the frames.
+- Shot detection (1) and vision (2) are also unaffected — they pick
+  their own analysis frame regardless of what we extracted.
+- **Camera classification (3) is the only phase whose output changes
+  meaningfully with frame rate.** If we go to 5 fps, we'd expect the
+  distribution to shift further toward tilt and pan (better time
+  resolution) but disk cost would double again.
+- The 47.2% beat-cut rate being identical is good — it means our
+  beat detection is robust and the same set of 34 shots out of 72
+  happen to be near a beat, regardless of how we classify their
+  camera motion.
 
 ## Architecture
 
@@ -64,7 +104,8 @@ YouTube URL ─▶ [Phase 0] ─▶ frames + audio
 
 ### Phase 0 — Input preparation
 
-**What:** Downloads the video, extracts frames at 1fps and audio as 16kHz mono WAV.
+**What:** Downloads the video, extracts frames at a configurable rate
+(default 2 fps) and audio as 16 kHz mono WAV.
 
 **Tools:**
 - **yt-dlp** — YouTube downloader (handles 95% of public videos)
@@ -72,17 +113,56 @@ YouTube URL ─▶ [Phase 0] ─▶ frames + audio
 
 **Output:**
 - `data/raw/video.mp4` (the source video)
-- `data/processed/frames/frame_NNNNN.jpg` (1 fps)
+- `data/processed/frames/frame_NNNNN.jpg` (default 2 fps, set via `--fps`)
 - `data/processed/audio.wav` (16 kHz mono PCM)
 - `data/processed/metadata.json` (duration, fps, resolution)
 
-**Why 1 fps?** Cuts per second in music videos typically cap at ~4-8.
-1 fps gives 2-3x oversampling, frames are 1-5 KB each (manageable),
-and downstream models don't need more.
+**Sampling-rate decision: 2 fps (configurable via `--fps`)**
+
+This is the most important knob in the pipeline. It determines the
+time-resolution of *every* downstream phase that uses frames. The
+trade-offs:
+
+| Rate | Frames per 3-min video | Disk | Optical-flow time resolution | Sub-second motion |
+|---|---|---|---|---|
+| 0.5 fps | 90 | 0.5 MB | 2 sec between frames | missed |
+| **2 fps (default)** | **430** | **~10 MB** | **0.5 sec between frames** | **detected for >2s shots** |
+| 5 fps | 900 | ~20 MB | 0.2 sec between frames | detected for >0.4s shots |
+| 24 fps (native) | 4320 | ~200 MB | 0.04 sec between frames | full resolution |
+
+**Why 2 fps and not 1 fps?** The first version of this project used
+1 fps. That worked fine for shot detection and vision analysis (which
+both pick 1 frame per shot anyway), but **phase 3 (optical-flow camera
+classification) suffered** — frames 1 second apart cannot distinguish a
+fast pan from a series of static frames. At 2 fps, consecutive frames
+are 0.5 sec apart, so we can detect pan/tilt/zoom motion that completes
+in 1-2 seconds (typical for music videos).
+
+**Why not higher?** Disk and CPU cost grow linearly. 24 fps is the
+native video rate but would generate ~200 MB of JPEG frames per video.
+10 fps would catch every camera motion but at 4× the storage of 2 fps
+for marginal improvement. **2 fps is the sweet spot for music videos:**
+shots are typically 1-5 seconds, so 2-10 frames per shot is plenty
+for optical flow to compute meaningful motion statistics.
 
 **Why 16 kHz mono?** Whisper expects 16 kHz. CLAP is 48 kHz (it
 re-samples internally if needed). Mono halves disk usage with no
 quality loss for music analysis.
+
+**How each phase uses the frames:**
+- **Phase 1** (shot detection) — reads the video directly, ignores the
+  extracted frames. Frame rate is irrelevant.
+- **Phase 2** (vision) — picks 1 mid-frame per shot. Only needs the
+  frames to exist; their rate doesn't matter.
+- **Phase 3** (optical flow) — uses ALL frames within each shot. **This
+  is where frame rate matters most.** At 1 fps, a 1-second shot has 2
+  frames → optical flow sees 1 comparison. At 2 fps, 3 frames → 2
+  comparisons. At 5 fps, 6 frames → 5 comparisons. More comparisons =
+  better motion estimates.
+- **Phases 4-8** (audio + sync + dashboard) — don't use frames.
+
+For a detailed per-phase numerical comparison of 1 fps vs 2 fps, see
+[docs/COMPARISON_1FPS_VS_2FPS.md](docs/COMPARISON_1FPS_VS_2FPS.md).
 
 ### Phase 1 — Shot boundary detection
 

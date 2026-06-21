@@ -1,0 +1,13 @@
+{
+  "detector": "PySceneDetect-ContentDetector",
+  "detector_version": "0.7",
+  "threshold": 35.0,
+  "min_scene_len_frames": 30,
+  "fps": 23.976,
+  "total_frames": 5163,
+  "n_shots": 72,
+  "avg_shot_duration_sec": 2.991,
+  "min_shot_duration_sec": 1.293,
+  "max_shot_duration_sec": 9.468,
+  "video_path": "data\\raw\\video.mp4"
+}

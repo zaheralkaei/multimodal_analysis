@@ -1,9 +1,14 @@
 """
 Phase 0 — Input prep.
 Takes a YouTube URL or local video file and extracts:
-  - frames at 1 fps (saved as PNGs in data/processed/frames/)
-  - audio track as 16kHz mono WAV (data/processed/audio.wav)
+  - frames at 2 fps (configurable via --fps; saved as JPEGs in data/processed/frames/)
+  - audio track as 16 kHz mono WAV (data/processed/audio.wav)
   - metadata JSON (data/processed/metadata.json)
+
+Why 2 fps? See README.md "Phase 0 — Input preparation" for the full trade-off
+table. Short version: 1 fps missed fast camera motion in phase 3 (optical
+flow), 5 fps is 4× the storage for marginal gain, 24 fps is overkill.
+2 fps gives 0.5s time resolution which catches pan/tilt/zoom in 1-2s shots.
 """
 from __future__ import annotations
 import argparse, json, subprocess, sys
@@ -107,7 +112,7 @@ def extract_frames(video: Path, out_dir: Path, fps: int = 1) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("source", help="YouTube URL or local video path")
-    parser.add_argument("--fps", type=int, default=1, help="frames per second to extract")
+    parser.add_argument("--fps", type=int, default=2, help="frames per second to extract")
     args = parser.parse_args()
 
     if not have_ffmpeg():
