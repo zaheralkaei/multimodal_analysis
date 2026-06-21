@@ -1,5 +1,6 @@
 # Generated data — downloaded/created by the pipeline, regenerable
 data/raw/
+data/processed/*.csv
 data/processed/*.json
 data/processed/*.wav
 data/processed/*.mp4
