@@ -1,0 +1,36 @@
+# Pinned for reproducibility on Windows Python 3.13 + Linux Python 3.12
+# Tested with these versions; newer minor versions likely work.
+
+# Video download + frame extraction
+yt-dlp>=2024.1.0
+# ffmpeg must be installed separately (apt/brew/choco)
+
+# Shot detection (PySceneDetect ContentDetector)
+scenedetect>=0.6.5
+
+# Vision-language model via Ollama (cloud OR local)
+# pip install ollama>=0.4.0  # only needed if using ollama Python client
+# We use urllib directly, so no ollama package needed.
+
+# Audio transcription
+faster-whisper>=1.0.0
+
+# Audio tagging (CLAP)
+transformers>=4.40.0
+torch>=2.0.0
+
+# Audio analysis
+librosa>=0.10.0
+soundfile>=0.12.0
+
+# Computer vision
+opencv-python-headless>=4.8.0
+
+# Data + dashboard
+numpy>=1.24.0
+pandas>=2.0.0
+plotly>=5.18.0
+Pillow>=10.0.0
+
+# Whisper large-v3 needs huggingface-cli for model download
+# huggingface_hub>=0.20.0

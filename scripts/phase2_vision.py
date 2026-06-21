@@ -93,38 +93,79 @@ def encode_image(path: Path) -> str:
     return base64.b64encode(path.read_bytes()).decode()
 
 
-def analyze_shots(model: str, shots: list[dict], frames_dir: Path) -> tuple[list[dict], dict]:
-    """For each shot, ask all questions about its mid frame."""
+def analyze_shots(model: str, shots: list[dict], frames_dir: Path,
+                  out_csv: Path) -> tuple[list[dict], dict]:
+    """For each shot, ask all questions about its mid frame. Saves incrementally."""
+    import csv
     rows = []
     stats = {"calls": 0, "errors": 0, "total_seconds": 0.0}
-    for i, shot in enumerate(shots):
-        mid_rel = shot["mid_frame_path"]
-        mid_path = REPO_ROOT / mid_rel
-        if not mid_path.exists():
-            print(f"[warn] shot {i}: mid-frame missing: {mid_path}", flush=True)
-            continue
-        b64 = encode_image(mid_path)
-        row = {
-            "shot_idx": i,
-            "start_sec": shot["start_sec"],
-            "end_sec": shot["end_sec"],
-            "duration_sec": shot["duration_sec"],
-            "mid_frame": mid_rel,
-        }
-        for qname, qprompt in QUESTIONS:
-            try:
-                ans, secs = call_ollama(model, qprompt, b64)
-                row[qname] = ans
-                stats["calls"] += 1
-                stats["total_seconds"] += secs
-            except Exception as e:
-                row[qname] = f"[error: {e}]"
-                stats["errors"] += 1
-        rows.append(row)
-        if (i + 1) % 5 == 0 or i == len(shots) - 1:
-            print(f"  [{i+1}/{len(shots)}] shots analyzed "
-                  f"(avg {stats['total_seconds']/max(1, stats['calls']):.1f}s/call)",
-                  flush=True)
+
+    # Resume support: load any existing rows from out_csv.
+    # DEDUPE: keep LAST row per shot_idx (in case prior resume appended dupes).
+    existing = {}
+    if out_csv.exists():
+        with out_csv.open(encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                try:
+                    existing[int(r["shot_idx"])] = r
+                except (ValueError, KeyError):
+                    pass
+        if existing:
+            print(f"[info] resuming from existing CSV: {len(existing)} shots already done")
+            # Rewrite the CSV without duplicates (in case prior run appended dupes)
+            cols = ["shot_idx", "start_sec", "end_sec", "duration_sec", "mid_frame"] + [q[0] for q in QUESTIONS]
+            tmp_rows = sorted(existing.values(), key=lambda r: int(r["shot_idx"]))
+            with out_csv.open("w", encoding="utf-8", newline="") as f:
+                w = csv.DictWriter(f, fieldnames=cols)
+                w.writeheader()
+                for r in tmp_rows:
+                    w.writerow(r)
+
+    cols = ["shot_idx", "start_sec", "end_sec", "duration_sec", "mid_frame"] + [q[0] for q in QUESTIONS]
+
+    # Open CSV in append mode (or write header if new)
+    file_exists = out_csv.exists()
+    f_out = out_csv.open("a", encoding="utf-8", newline="")
+    writer = csv.DictWriter(f_out, fieldnames=cols)
+    if not file_exists:
+        writer.writeheader()
+
+    try:
+        for i, shot in enumerate(shots):
+            if i in existing:
+                rows.append(existing[i])
+                continue
+            mid_rel = shot["mid_frame_path"]
+            mid_path = REPO_ROOT / mid_rel
+            if not mid_path.exists():
+                print(f"[warn] shot {i}: mid-frame missing: {mid_path}", flush=True)
+                continue
+            b64 = encode_image(mid_path)
+            row = {
+                "shot_idx": i,
+                "start_sec": shot["start_sec"],
+                "end_sec": shot["end_sec"],
+                "duration_sec": shot["duration_sec"],
+                "mid_frame": mid_rel,
+            }
+            for qname, qprompt in QUESTIONS:
+                try:
+                    ans, secs = call_ollama(model, qprompt, b64)
+                    row[qname] = ans
+                    stats["calls"] += 1
+                    stats["total_seconds"] += secs
+                except Exception as e:
+                    row[qname] = f"[error: {e}]"
+                    stats["errors"] += 1
+            rows.append(row)
+            writer.writerow(row)
+            f_out.flush()  # write to disk immediately so we can resume on crash
+            if (i + 1) % 5 == 0 or i == len(shots) - 1:
+                print(f"  [{i+1}/{len(shots)}] shots analyzed "
+                      f"(avg {stats['total_seconds']/max(1, stats['calls']):.1f}s/call)",
+                      flush=True)
+    finally:
+        f_out.close()
     return rows, stats
 
 
@@ -174,16 +215,10 @@ def main() -> int:
 
     print(f"\n[info] analyzing {len(shots)} shots × {len(QUESTIONS)} questions = "
           f"{len(shots) * len(QUESTIONS)} total calls", flush=True)
-    rows, stats = analyze_shots(args.model, shots, PROCESSED / "frames")
-
-    # Write CSV
     out_csv = PROCESSED / "shot_vision.csv"
-    cols = ["shot_idx", "start_sec", "end_sec", "duration_sec", "mid_frame"] + [q[0] for q in QUESTIONS]
-    with out_csv.open("w", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=cols)
-        w.writeheader()
-        for row in rows:
-            w.writerow(row)
+    rows, stats = analyze_shots(args.model, shots, PROCESSED / "frames", out_csv)
+
+    # Final summary (CSV was written incrementally during analysis)
     print(f"\n[ok] wrote {out_csv.relative_to(REPO_ROOT)} ({len(rows)} rows, "
           f"{stats['calls']} successful calls, {stats['errors']} errors)")
     print(f"[stats] total time: {stats['total_seconds']:.0f}s "
