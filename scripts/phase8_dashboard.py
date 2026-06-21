@@ -272,16 +272,23 @@ def main() -> int:
     report_frames_dir.mkdir(exist_ok=True)
     import shutil
     n_copied = 0
+    n_skipped = 0
     for s in shots:
         mid_rel = s.get("mid_frame", "")
         if mid_rel:
             src = REPO_ROOT / mid_rel
             if src.exists():
                 dst = report_frames_dir / src.name
-                if not dst.exists():  # avoid re-copying on every regen
-                    shutil.copy2(src, dst)
-                    n_copied += 1
-    print(f"[info] copied {n_copied} mid-frames to {report_frames_dir.relative_to(REPO_ROOT)}")
+                # Skip ONLY if existing file matches source size (avoids stale thumbnails
+                # from a previous run with a different video, where the new file has a
+                # different resolution/size). Bug discovered when running on 4 Blocks
+                # after Tyla — both had frame_00009.jpg with different sizes.
+                if dst.exists() and dst.stat().st_size == src.stat().st_size:
+                    n_skipped += 1
+                    continue
+                shutil.copy2(src, dst)
+                n_copied += 1
+    print(f"[info] copied {n_copied} mid-frames to {report_frames_dir.relative_to(REPO_ROOT)} (skipped {n_skipped} that already match)")
 
     n_rows = len(shots)
     table_rows = []
