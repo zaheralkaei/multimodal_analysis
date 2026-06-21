@@ -9,12 +9,14 @@ Uses Ollama for vision-language inference. Supports both:
   - Local ollama (http://localhost:11434) — works offline, model must fit in RAM
   - Ollama cloud (https://ollama.com/api) — needs OLLAMA_API_KEY in .env
 
-Endpoint selected via OLLAMA_BASE_URL env var (defaults to local).
-Model selected via --model flag (defaults to OLLAMA_VISION_MODEL env var
-or "gemma3:4b" if neither is set).
+Round-2 fixes (vs round 1):
+  - Single combined JSON-mode prompt per shot (was 8 separate prompts).
+    8× fewer API calls, ~8× faster.
+  - num_predict raised to 1500 (was 300) so captions complete mid-sentence.
+  - stop tokens added so model doesn't ramble past the JSON.
+  - JSON parse with markdown-fence stripping and field validation.
 
-Each question is asked separately with temperature=0 and seed=42 for
-reproducibility (see Phase 2 of taylor-swift-lyrics-nlp audit pattern).
+Each question is asked at temperature=0 and seed=42 for reproducibility.
 """
 from __future__ import annotations
 import argparse, base64, csv, json, os, sys, time
@@ -31,28 +33,44 @@ try:
 except ImportError:
     pass
 
+try:
+    from _normalize_emotion import normalize_emotion as _normalize_emotion_raw
+    NORMALIZE_EMOTIONS = True
+except ImportError:
+    NORMALIZE_EMOTIONS = False
+    _normalize_emotion_raw = lambda x: x  # passthrough
 
-# Each question gets its own column in the output CSV. Order matters.
+
+# Each question gets its own column in the output CSV.
 QUESTIONS = [
     ("caption",      "Describe this scene in 1-2 sentences. Be specific about what is visible."),
-    ("camera",       "What is the camera doing? Answer with ONE of: static, pan, tilt, zoom-in, zoom-out, dolly, tracking, handheld, or unknown."),
-    ("emotion",      "What is the dominant emotion shown by the people in this frame? Answer with one or two words (e.g. 'sad', 'joyful', 'anxious', 'neutral', 'angry', 'contemplative')."),
-    ("colors",       "List the 3 most prominent colors in this frame, comma-separated (e.g. 'blue, white, brown')."),
-    ("entities",     "List the main objects and people visible, comma-separated. Be concise (max 8 items)."),
-    ("location",     "Is this scene indoor or outdoor? Also describe the setting in 3-5 words."),
-    ("lighting",     "Describe the lighting in 3-5 words (e.g. 'harsh sunlight', 'dim warm interior', 'neon-lit night')."),
-    ("composition",  "Describe the visual composition/framing in 3-5 words (e.g. 'close-up face', 'wide aerial shot', 'over-shoulder medium')."),
+    ("camera",       "What is the camera doing? ONE word from: static, pan, tilt, zoom-in, zoom-out, dolly, tracking, handheld, unknown."),
+    ("emotion",      "Dominant emotion of people in frame. ONE OR TWO WORDS from: joyful, sad, angry, fearful, surprised, disgusted, neutral, contemplative, sensual, energetic, melancholic, anxious, playful, romantic, intense, confident."),
+    ("colors",       "3 most prominent colors, comma-separated (e.g. 'blue, white, brown')."),
+    ("entities",     "Main objects and people, comma-separated. Max 8 items, concise."),
+    ("location",     "indoor or outdoor + setting in 3-5 words (e.g. 'indoor bedroom', 'outdoor beach at sunset')."),
+    ("lighting",     "Lighting in 3-5 words (e.g. 'harsh sunlight', 'dim warm interior', 'neon-lit night')."),
+    ("composition",  "Visual composition/framing in 3-5 words (e.g. 'close-up face', 'wide aerial shot', 'over-shoulder medium')."),
 ]
+
+# JSON-mode instruction prepended to every prompt
+JSON_INSTRUCTION = """Respond with ONLY a JSON object in this exact schema:
+{
+  "caption": "<your 1-2 sentence description>",
+  "camera": "<one word from the list>",
+  "emotion": "<one or two words>",
+  "colors": "<comma-separated>",
+  "entities": "<comma-separated>",
+  "location": "<indoor/outdoor + 3-5 word setting>",
+  "lighting": "<3-5 words>",
+  "composition": "<3-5 words>"
+}
+Do not add any text before or after the JSON. No markdown code fences."""
 
 
 def get_endpoint() -> tuple[str, dict]:
-    """Return (url, headers) for the ollama endpoint.
-
-    Reads OLLAMA_BASE_URL from env (default: http://localhost:11434).
-    If URL is the cloud (https://ollama.com), adds Authorization header.
-    """
+    """Return (url, headers) for the ollama endpoint."""
     base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
-    # If base already has /api, don't add it again
     if base.endswith("/api"):
         url = f"{base}/generate"
     else:
@@ -67,8 +85,12 @@ def get_endpoint() -> tuple[str, dict]:
 
 
 def call_ollama(model: str, prompt: str, image_b64: str, timeout: int = 120,
-                seed: int = 42) -> tuple[str, float]:
-    """Call ollama /api/generate. Returns (response_text, latency_seconds)."""
+                seed: int = 42, num_predict: int = 1500) -> tuple[str, float]:
+    """Call ollama /api/generate. Returns (response_text, latency_seconds).
+
+    num_predict=1500 (was 300) so JSON responses complete.
+    Stop tokens prevent rambling past the answer.
+    """
     import urllib.request
     url, headers = get_endpoint()
     payload = {
@@ -76,7 +98,12 @@ def call_ollama(model: str, prompt: str, image_b64: str, timeout: int = 120,
         "prompt": prompt,
         "images": [image_b64],
         "stream": False,
-        "options": {"temperature": 0, "seed": seed, "num_predict": 300},
+        "options": {
+            "temperature": 0,
+            "seed": seed,
+            "num_predict": num_predict,
+            "stop": ["\n\n", "###", "Question:", "---"],
+        },
     }
     req = urllib.request.Request(
         url,
@@ -93,15 +120,57 @@ def encode_image(path: Path) -> str:
     return base64.b64encode(path.read_bytes()).decode()
 
 
+def build_combined_prompt() -> str:
+    """Build the full JSON-mode prompt (used for ALL shots)."""
+    parts = [JSON_INSTRUCTION, "\n\nImage to analyze:"]
+    for qname, qprompt in QUESTIONS:
+        parts.append(f"- {qname}: {qprompt}")
+    return "\n".join(parts)
+
+
+COMBINED_PROMPT = build_combined_prompt()
+
+
+def parse_json_response(raw: str) -> dict:
+    """Try to parse the model's response as JSON. Recover from common failures."""
+    text = raw.strip()
+    # Strip markdown code fences
+    if text.startswith("```"):
+        lines = text.split("\n")
+        text = "\n".join(lines[1:])
+        if text.endswith("```"):
+            text = text[:-3].strip()
+    # Try to find the first { and last }
+    if "{" in text:
+        start = text.index("{")
+        end = text.rfind("}")
+        if end > start:
+            text = text[start:end+1]
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return {"_parse_error": raw[:200]}
+
+    cleaned = {}
+    for q in QUESTIONS:
+        key = q[0]
+        if key in data:
+            v = data[key]
+            if isinstance(v, list):
+                v = ", ".join(str(x) for x in v)
+            cleaned[key] = str(v).strip()
+        else:
+            cleaned[key] = ""
+    return cleaned
+
+
 def analyze_shots(model: str, shots: list[dict], frames_dir: Path,
                   out_csv: Path) -> tuple[list[dict], dict]:
-    """For each shot, ask all questions about its mid frame. Saves incrementally."""
-    import csv
+    """For each shot, ask the combined JSON-mode prompt once. Saves incrementally."""
     rows = []
-    stats = {"calls": 0, "errors": 0, "total_seconds": 0.0}
+    stats = {"calls": 0, "errors": 0, "parse_errors": 0, "total_seconds": 0.0}
 
     # Resume support: load any existing rows from out_csv.
-    # DEDUPE: keep LAST row per shot_idx (in case prior resume appended dupes).
     existing = {}
     if out_csv.exists():
         with out_csv.open(encoding="utf-8") as f:
@@ -112,7 +181,6 @@ def analyze_shots(model: str, shots: list[dict], frames_dir: Path,
                     pass
         if existing:
             print(f"[info] resuming from existing CSV: {len(existing)} shots already done")
-            # Rewrite the CSV without duplicates (in case prior run appended dupes)
             cols = ["shot_idx", "start_sec", "end_sec", "duration_sec", "mid_frame"] + [q[0] for q in QUESTIONS]
             tmp_rows = sorted(existing.values(), key=lambda r: int(r["shot_idx"]))
             with out_csv.open("w", encoding="utf-8", newline="") as f:
@@ -123,7 +191,6 @@ def analyze_shots(model: str, shots: list[dict], frames_dir: Path,
 
     cols = ["shot_idx", "start_sec", "end_sec", "duration_sec", "mid_frame"] + [q[0] for q in QUESTIONS]
 
-    # Open CSV in append mode (or write header if new)
     file_exists = out_csv.exists()
     f_out = out_csv.open("a", encoding="utf-8", newline="")
     writer = csv.DictWriter(f_out, fieldnames=cols)
@@ -148,21 +215,30 @@ def analyze_shots(model: str, shots: list[dict], frames_dir: Path,
                 "duration_sec": shot["duration_sec"],
                 "mid_frame": mid_rel,
             }
-            for qname, qprompt in QUESTIONS:
-                try:
-                    ans, secs = call_ollama(model, qprompt, b64)
-                    row[qname] = ans
-                    stats["calls"] += 1
-                    stats["total_seconds"] += secs
-                except Exception as e:
-                    row[qname] = f"[error: {e}]"
-                    stats["errors"] += 1
+            try:
+                            raw, secs = call_ollama(model, COMBINED_PROMPT, b64)
+                            parsed = parse_json_response(raw)
+                            if "_parse_error" in parsed:
+                                row["caption"] = f"[parse_error: {parsed['_parse_error']}]"
+                                stats["parse_errors"] += 1
+                            else:
+                                for qname, _ in QUESTIONS:
+                                    v = parsed.get(qname, "")
+                                    if qname == "emotion" and NORMALIZE_EMOTIONS and v:
+                                        v = _normalize_emotion_raw(v)
+                                    row[qname] = v
+                            stats["calls"] += 1
+                            stats["total_seconds"] += secs
+            except Exception as e:
+                row["caption"] = f"[error: {e}]"
+                stats["errors"] += 1
             rows.append(row)
             writer.writerow(row)
-            f_out.flush()  # write to disk immediately so we can resume on crash
+            f_out.flush()
             if (i + 1) % 5 == 0 or i == len(shots) - 1:
                 print(f"  [{i+1}/{len(shots)}] shots analyzed "
-                      f"(avg {stats['total_seconds']/max(1, stats['calls']):.1f}s/call)",
+                      f"(avg {stats['total_seconds']/max(1, stats['calls']):.1f}s/call, "
+                      f"{stats['parse_errors']} parse errors)",
                       flush=True)
     finally:
         f_out.close()
@@ -174,8 +250,7 @@ def main() -> int:
     default_model = os.environ.get("VISION_MODEL", "gemma3:4b")
     parser.add_argument("--model", default=default_model,
                        help=f"Ollama vision model name (default: {default_model}). "
-                            f"Use OLLAMA_VISION_MODEL env var to set a different default. "
-                            f"Cloud options: qwen2.5vl:72b-cloud, qwen2.5vl:32b-cloud, gemma3:27b-cloud.")
+                            f"Cloud options include gemini-3-flash-preview, gemma3:27b.")
     args = parser.parse_args()
 
     # Show config
@@ -202,9 +277,8 @@ def main() -> int:
         dummy_path = REPO_ROOT / "data" / "processed" / "_healthcheck.jpg"
         dummy.save(dummy_path)
         b64 = base64.b64encode(dummy_path.read_bytes()).decode()
-        # Cloud models need longer timeout for first call (cold start)
         timeout = 180 if "ollama.com" in base else 60
-        resp, secs = call_ollama(args.model, "Reply with the word 'ready' only.", b64, timeout=timeout)
+        resp, secs = call_ollama(args.model, "Reply with the word 'ready' only.", b64, timeout=timeout, num_predict=50)
         print(f"[ok] model responded in {secs:.1f}s: {resp[:50]!r}", flush=True)
         dummy_path.unlink(missing_ok=True)
     except Exception as e:
@@ -213,14 +287,14 @@ def main() -> int:
         print(f"  - if using local: ensure ollama is running and model is pulled: ollama pull {args.model}")
         return 1
 
-    print(f"\n[info] analyzing {len(shots)} shots × {len(QUESTIONS)} questions = "
-          f"{len(shots) * len(QUESTIONS)} total calls", flush=True)
+    print(f"\n[info] analyzing {len(shots)} shots with combined JSON prompt = "
+          f"{len(shots)} total calls (was {len(shots) * len(QUESTIONS)} before A1 fix)", flush=True)
     out_csv = PROCESSED / "shot_vision.csv"
     rows, stats = analyze_shots(args.model, shots, PROCESSED / "frames", out_csv)
 
-    # Final summary (CSV was written incrementally during analysis)
     print(f"\n[ok] wrote {out_csv.relative_to(REPO_ROOT)} ({len(rows)} rows, "
-          f"{stats['calls']} successful calls, {stats['errors']} errors)")
+          f"{stats['calls']} successful calls, {stats['parse_errors']} parse errors, "
+          f"{stats['errors']} errors)")
     print(f"[stats] total time: {stats['total_seconds']:.0f}s "
           f"({stats['total_seconds']/60:.1f} min, "
           f"avg {stats['total_seconds']/max(1,stats['calls']):.1f}s/call)")

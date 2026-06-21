@@ -158,6 +158,27 @@ def main() -> int:
         print(f"\n[sanity] avg-highest mood: '{max_mood}'")
         print(f"[sanity] avg-highest section: '{max_section}'")
 
+        # Tag activity report (round-2 audit finding):
+        # 21/27 tags had variance ~0 in Tyla run. A tag is "active" if
+        # its max score across windows exceeds the threshold. This is a
+        # signal-to-noise check: tags that never score > 0.05 are noise.
+        ACTIVE_THRESHOLD = 0.05
+        active = []
+        inactive = []
+        for tag in ALL_TAGS:
+            max_score = max(float(r[tag]) for r in rows)
+            if max_score > ACTIVE_THRESHOLD:
+                active.append((tag, max_score))
+            else:
+                inactive.append((tag, max_score))
+        print(f"\n[active] {len(active)}/{len(ALL_TAGS)} tags have max score > {ACTIVE_THRESHOLD}:")
+        for tag, mx in sorted(active, key=lambda x: -x[1]):
+            print(f"  ✓ {tag:<30} max={mx:.3f}")
+        if inactive:
+            print(f"[inactive] {len(inactive)} tags below threshold (will appear as flat-zero in dashboard):")
+            for tag, mx in sorted(inactive, key=lambda x: -x[1]):
+                print(f"  · {tag:<30} max={mx:.3f}")
+
     print(f"\n[next] Phase 6: python scripts/phase6_music.py")
     return 0
 

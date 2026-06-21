@@ -210,17 +210,38 @@ def main() -> int:
     )
     emotion_dist_html = fig_emotion.to_html(include_plotlyjs=False, full_html=False, div_id="chart_emotion")
 
-    # ===== Chart 3: Camera motion distribution =====
+    # ===== Chart 3: Camera motion distribution + VLM-vs-OpenCV comparison =====
     cam_counts = Counter(s.get("camera_motion", "unknown") for s in shots)
     fig_cam = go.Figure(data=[go.Pie(
         labels=list(cam_counts.keys()), values=list(cam_counts.values()),
         hole=0.4, textinfo="label+percent",
     )])
     fig_cam.update_layout(
-        title="Camera motion distribution",
+        title="Camera motion distribution (OpenCV optical flow)",
         template="plotly_white",
     )
     cam_dist_html = fig_cam.to_html(include_plotlyjs=False, full_html=False, div_id="chart_camera")
+
+    # VLM camera vs OpenCV camera comparison table
+    vlm_counts = Counter(s.get("vision_camera_from_vlm", "") or "(none)" for s in shots)
+    agreement_count = sum(1 for s in shots
+                           if (s.get("camera_motion", "") or "")
+                           and (s.get("vision_camera_from_vlm", "") or "")
+                           and s.get("camera_motion") == s.get("vision_camera_from_vlm"))
+    agreement_pct = round(100 * agreement_count / max(1, len([s for s in shots if s.get("vision_camera_from_vlm")])), 1)
+
+    vlm_cam_html = f"<table border='1' style='border-collapse:collapse;font-family:monospace;font-size:12px;'>"
+    vlm_cam_html += "<tr><th style='padding:6px 12px;background:#eee;'>Source</th><th style='padding:6px 12px;background:#eee;'>Method</th><th style='padding:6px 12px;background:#eee;'>Top motion</th><th style='padding:6px 12px;background:#eee;'>Shot count</th></tr>"
+    # OpenCV row
+    top_opencv = cam_counts.most_common(1)[0] if cam_counts else ("?", 0)
+    vlm_cam_html += f"<tr><td style='padding:6px 12px;'><b>OpenCV</b></td><td style='padding:6px 12px;'>optical flow (50 frames per shot)</td><td style='padding:6px 12px;'>{top_opencv[0]}</td><td style='padding:6px 12px;'>{top_opencv[1]} ({100*top_opencv[1]/len(shots):.0f}%)</td></tr>"
+    # VLM row
+    top_vlm = vlm_counts.most_common(1)[0] if vlm_counts else ("?", 0)
+    vlm_cam_html += f"<tr><td style='padding:6px 12px;'><b>Gemini 3 Flash</b></td><td style='padding:6px 12px;'>single mid-frame per shot</td><td style='padding:6px 12px;'>{top_vlm[0]}</td><td style='padding:6px 12px;'>{top_vlm[1]} ({100*top_vlm[1]/max(1, len(shots)):.0f}%)</td></tr>"
+    # Agreement row
+    vlm_cam_html += f"<tr><td style='padding:6px 12px;'><b>Agreement</b></td><td style='padding:6px 12px;'>shot-level exact-match</td><td style='padding:6px 12px;'>-</td><td style='padding:6px 12px;'>{agreement_count}/{len(shots)} = <b>{agreement_pct}%</b></td></tr>"
+    vlm_cam_html += "</table>"
+    vlm_cam_html += "<p style='font-size:11px;color:#666;margin-top:4px;'>The mid-frame alone cannot show camera motion (Gemini sees 1 instant). OpenCV optical flow sees 50+ frames per shot and is genuinely better at detecting pan/tilt/zoom. The VLM still helps with semantic understanding (what the subject is doing). Both signals are kept separately in <code>sync_per_shot.csv</code> as <code>camera_motion</code> and <code>vision_camera_from_vlm</code>.</p>"
 
     # ===== Chart 4: Audio mood averages =====
     clap_loaded = list(csv.DictReader(clap_path.open(encoding="utf-8"))) if clap_path.exists() else []
@@ -424,6 +445,7 @@ def main() -> int:
   <div class="panel">{emotion_dist_html}</div>
   <div class="panel">{cam_dist_html}</div>
 </div>
+<div class="panel">{vlm_cam_html}</div>
 <div class="panel">{mood_avg_html}</div>
 
 <h2>3. Per-shot detail ({len(shots)} shots total)</h2>
