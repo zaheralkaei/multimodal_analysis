@@ -276,7 +276,7 @@ def main() -> int:
     try:
         from PIL import Image
         dummy = Image.new("RGB", (224, 224), color=(128, 128, 128))
-        dummy_path = REPO_ROOT / "data" / "processed" / "_healthcheck.jpg"
+        dummy_path = PROCESSED / "_healthcheck.jpg"
         dummy.save(dummy_path)
         b64 = base64.b64encode(dummy_path.read_bytes()).decode()
         timeout = 180 if "ollama.com" in base else 60
