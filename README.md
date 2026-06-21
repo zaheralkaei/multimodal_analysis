@@ -474,6 +474,20 @@ are directly comparable.
   - Slow art films (no lyrics, long static shots)
   - Live performances (no shot boundaries, just one long take)
   - Abstract/music-only videos (no vocal, no scenes)
+- **Camera motion needs OpenCV, not the VLM** — Gemini can't see camera
+  motion from a single mid-frame, and 5-frame sequences don't help
+  (it confuses tilt with zoom-in). See
+  [docs/CAMERA_DETECTION.md](docs/CAMERA_DETECTION.md) for the full
+  experiment and reasoning.
+
+## Design notes
+
+- [docs/CAMERA_DETECTION.md](docs/CAMERA_DETECTION.md) — why we use
+  OpenCV for camera, not the VLM
+- [docs/COMPARISON_1FPS_VS_2FPS.md](docs/COMPARISON_1FPS_VS_2FPS.md) —
+  frame-rate sensitivity analysis
+- [docs/PLAN_ROUND_2.md](docs/PLAN_ROUND_2.md) — round-2 audit plan
+  + what's been done
 
 ## License
 

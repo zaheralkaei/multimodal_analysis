@@ -50,27 +50,39 @@ Re-checked GitHub + arxiv + HuggingFace. Findings:
 
 ## Plan
 
-### Part A — Fix data quality bugs (3-5 hours)
+### Part A — Fix data quality bugs (DONE)
 
-A1. **Structured-output prompting + post-parse.** Change phase2 to send a JSON schema with each question. Use `format: "json"` or include a "respond with ONLY valid JSON" instruction. Parse the response and reject malformed rows. **Expected:** emotion count drops from 34 to ≤12.
+A1. **Structured-output prompting + post-parse.** ✅ Combined JSON-mode prompt + `parse_json_response()`. 1 call/shot instead of 8.
 
-A2. **Bump `num_predict` and use `stop` tokens.** Increase from 300 to 800 so captions complete, and add `stop: ["\n\n", "###"]` to stop Gemini from continuing into another question. **Expected:** 0 truncated captions.
+A2. **Bump `num_predict` and use `stop` tokens.** ✅ num_predict=1500, stop tokens for `\n\n`, `###`, etc.
 
-A3. **Emotion normalization.** Build a small synonym map: `{sensual: romantic, sultry: romantic, seductive: romantic, ...}` (maybe 30-50 entries). Apply after Gemini returns. **Expected:** 34 → 12 distinct emotions.
+A3. **Emotion normalization.** ✅ `_normalize_emotion.py` with 16 canonical + ~80 synonyms. 34→6 distinct emotions.
 
-A4. **Filter zero-variance CLAP tags post-hoc.** In phase 5, mark tags as "active" only if max score across windows > 0.1. Surface "inactive" in the dashboard. **Expected:** cleaner CLAP section.
+A4. **Filter zero-variance CLAP tags post-hoc.** ✅ Active-tag report in phase5 output.
 
-A5. **Save continuous camera motion scores.** Add `pan_score`, `tilt_score`, `zoom_score` per shot (already in `shot_camera.csv` actually — verify it's being read by phase 7). Plot these as scatter or violin in the dashboard.
+A5. **Save continuous camera motion scores.** ✅ Already in shot_camera.csv; propagated through phase7.
 
-### Part B — Compare to end-to-end VLM (4-6 hours)
+**Bonus experiment (B-prep):** Tested whether sending the actual video or multi-frame sequences to Gemini improves camera detection. Result: **no**. Single mid-frame is the same quality as 5-frame sequence (Gemini misclassifies tilt as zoom-in). OpenCV optical flow on 50+ frames per shot is genuinely better for camera motion. Decision: **keep optical flow for camera, keep VLM for semantics**. Added VLM-vs-OpenCV comparison table to dashboard.
 
-B1. **Run InternVideo2.5 / VideoLLaMA3 on the same video.** Download via HuggingFace transformers. Ask the same 8 questions. Compare answers shot-by-shot with Gemini's. **Expected:** see how a true video model vs. mid-frame VLMs differ (esp. on camera motion which a single frame can't capture).
+### Part B — Compare to end-to-end VLM (REVISED after Part A experiment)
 
-B2. **Add a phase 9 — narrative summary.** Take our structured per-shot data + the video, ask InternVideo2.5 to write a 200-word narrative. Compare with what the same model would write from just frames. This tests whether structured inputs help.
+**Findings from Part A bonus experiment:**
+- Sending the actual video or 5-frame sequences to Gemini does NOT improve camera detection.
+  Single mid-frame: 71/72 shots = static (can't see motion from 1 frame).
+  5-frame sequence: Gemini misclassifies clear tilt-down as zoom-in.
+  YouTube URL: not supported by Ollama cloud, model hallucinated.
+- **Decision:** OpenCV optical flow is genuinely better for camera motion. Keep optical flow as primary,
+  keep VLM as secondary (semantic understanding). Both signals kept in sync_per_shot.csv.
 
-B3. **Cost / time comparison table.** InternVideo2.5 8B on a 3:35 video at 24fps = 5163 frames. On a 16GB GPU it's 30-60s. On CPU it's ~30 min. Document this.
+**Revised Part B scope (still valuable):**
 
-B4. **Don't replace our pipeline.** InternVideo2.5 gives free-text, we give structured CSVs. They're complementary. Keep ours as the primary, add InternVideo2.5 as a "phase 9 narrative" option.
+B1. **End-to-end VLM as narrative-summary generator (NOT camera detector).** Ask Gemini 3 Flash to look at the structured per-shot data we've already produced and write a 200-word narrative ("This music video uses mostly close-ups with consistent warm lighting..."). Tests whether structured CSVs + LLM beats pure vision for high-level understanding.
+
+B2. **Local end-to-end VLM alternative.** Try InternVideo2.5 or VideoLLaMA3 on a small clip to see if local models work at all on our machine. They probably won't (CPU + 16GB RAM) but it's worth a 30-min attempt.
+
+B3. **Document the design choice.** Write a `docs/CAMERA_DETECTION.md` explaining why we use OpenCV for camera and not the VLM. Include the failed experiments.
+
+B4. **Skip B1-B2 if user prefers.** They were speculative. The real value from Part A was the data quality fixes (already done). B is "nice to have" for the round 2 close-out.
 
 ### Part C — Build a small human-labeled validation set (2-3 hours)
 
