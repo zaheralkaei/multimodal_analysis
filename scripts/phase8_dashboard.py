@@ -328,7 +328,7 @@ def main() -> int:
                 if cell:
                     cells.append(f"<{tag} style='padding:2px;background:#fff;text-align:center;'>"
                                  f"<img src='{cell}' loading='lazy' "
-                                 f"style='width:80px;height:auto;border:1px solid #ccc;cursor:pointer;' "
+                                 f"style='width:100px;height:auto;border:2px solid #555;cursor:pointer;' "
                                  f"onclick='window.open(this.src,\"_blank\")'/>"
                                  f"</{tag}>")
                 else:
