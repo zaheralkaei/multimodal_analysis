@@ -32,7 +32,8 @@ def get_video(source: str) -> Path:
         try:
             out = RAW / "video.mp4"
             print(f"[info] downloading {source} via yt-dlp ...")
-            subprocess.run(["yt-dlp", "-o", str(out), "-f", "best[ext=mp4]/best", source],
+            subprocess.run([sys.executable, "-m", "yt_dlp", "-o", str(out),
+                           "-f", "best[ext=mp4]/best", source],
                           check=True, timeout=600)
             return out
         except FileNotFoundError:

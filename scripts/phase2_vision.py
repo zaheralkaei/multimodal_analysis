@@ -3,21 +3,33 @@ Phase 2 — Per-shot visual analysis with a vision-language model.
 
 Reads:  data/processed/shots.json (from Phase 1)
         data/processed/frames/frame_*.jpg (from Phase 0)
-Writes: data/processed/shot_vision.csv — one row per shot with caption + camera + emotion + colors + entities + location + lighting + composition
+Writes: data/processed/shot_vision.csv — one row per shot with 8 Q&A columns
 
-Uses Ollama for vision-language inference. Default model: gemma3:4b (works
-locally with limited RAM). To use Qwen2.5-VL on a machine with more RAM, pass
---model qwen2.5vl:7b (or :3b).
+Uses Ollama for vision-language inference. Supports both:
+  - Local ollama (http://localhost:11434) — works offline, model must fit in RAM
+  - Ollama cloud (https://ollama.com/api) — needs OLLAMA_API_KEY in .env
 
-Each question is asked separately with temperature=0 for reproducibility and
-seed=42 (ollama supports seed; see Phase 2 of taylor-swift-lyrics-nlp audit).
+Endpoint selected via OLLAMA_BASE_URL env var (defaults to local).
+Model selected via --model flag (defaults to OLLAMA_VISION_MODEL env var
+or "gemma3:4b" if neither is set).
+
+Each question is asked separately with temperature=0 and seed=42 for
+reproducibility (see Phase 2 of taylor-swift-lyrics-nlp audit pattern).
 """
 from __future__ import annotations
-import argparse, base64, csv, json, sys, time
+import argparse, base64, csv, json, os, sys, time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROCESSED = REPO_ROOT / "data" / "processed"
+
+# Load .env for OLLAMA_API_KEY, OLLAMA_BASE_URL, etc.
+sys.path.insert(0, str(Path(__file__).parent))
+try:
+    from _env import load_env
+    load_env()
+except ImportError:
+    pass
 
 
 # Each question gets its own column in the output CSV. Order matters.
@@ -33,21 +45,43 @@ QUESTIONS = [
 ]
 
 
+def get_endpoint() -> tuple[str, dict]:
+    """Return (url, headers) for the ollama endpoint.
+
+    Reads OLLAMA_BASE_URL from env (default: http://localhost:11434).
+    If URL is the cloud (https://ollama.com), adds Authorization header.
+    """
+    base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+    # If base already has /api, don't add it again
+    if base.endswith("/api"):
+        url = f"{base}/generate"
+    else:
+        url = f"{base}/api/generate"
+    headers = {"Content-Type": "application/json"}
+    if "ollama.com" in base:
+        api_key = os.environ.get("OLLAMA_API_KEY", "")
+        if not api_key:
+            raise ValueError("OLLAMA_BASE_URL points to ollama.com but OLLAMA_API_KEY is not set")
+        headers["Authorization"] = f"Bearer {api_key}"
+    return url, headers
+
+
 def call_ollama(model: str, prompt: str, image_b64: str, timeout: int = 120,
                 seed: int = 42) -> tuple[str, float]:
     """Call ollama /api/generate. Returns (response_text, latency_seconds)."""
     import urllib.request
+    url, headers = get_endpoint()
     payload = {
         "model": model,
         "prompt": prompt,
         "images": [image_b64],
         "stream": False,
-        "options": {"temperature": 0, "seed": seed, "num_predict": 80},
+        "options": {"temperature": 0, "seed": seed, "num_predict": 300},
     }
     req = urllib.request.Request(
-        "http://localhost:11434/api/generate",
+        url,
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
+        headers=headers,
     )
     t0 = time.time()
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -67,7 +101,7 @@ def analyze_shots(model: str, shots: list[dict], frames_dir: Path) -> tuple[list
         mid_rel = shot["mid_frame_path"]
         mid_path = REPO_ROOT / mid_rel
         if not mid_path.exists():
-            print(f"[warn] shot {i}: mid-frame missing: {mid_path}")
+            print(f"[warn] shot {i}: mid-frame missing: {mid_path}", flush=True)
             continue
         b64 = encode_image(mid_path)
         row = {
@@ -89,16 +123,26 @@ def analyze_shots(model: str, shots: list[dict], frames_dir: Path) -> tuple[list
         rows.append(row)
         if (i + 1) % 5 == 0 or i == len(shots) - 1:
             print(f"  [{i+1}/{len(shots)}] shots analyzed "
-                  f"(avg {stats['total_seconds']/max(1, stats['calls']):.1f}s/call)")
+                  f"(avg {stats['total_seconds']/max(1, stats['calls']):.1f}s/call)",
+                  flush=True)
     return rows, stats
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--model", default="gemma3:4b",
-                       help="Ollama vision model name (default: gemma3:4b). "
-                            "Use qwen2.5vl:7b on a machine with >=48GB RAM.")
+    default_model = os.environ.get("VISION_MODEL", "gemma3:4b")
+    parser.add_argument("--model", default=default_model,
+                       help=f"Ollama vision model name (default: {default_model}). "
+                            f"Use OLLAMA_VISION_MODEL env var to set a different default. "
+                            f"Cloud options: qwen2.5vl:72b-cloud, qwen2.5vl:32b-cloud, gemma3:27b-cloud.")
     args = parser.parse_args()
+
+    # Show config
+    base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    has_key = bool(os.environ.get("OLLAMA_API_KEY"))
+    print(f"[info] endpoint: {base}")
+    print(f"[info] auth: {'bearer token' if has_key else 'no auth (local)'}")
+    print(f"[info] model: {args.model}")
 
     shots_path = PROCESSED / "shots.json"
     if not shots_path.exists():
@@ -107,27 +151,29 @@ def main() -> int:
         return 1
 
     shots = json.loads(shots_path.read_text(encoding="utf-8"))
-    print(f"[info] loaded {len(shots)} shots")
-    print(f"[info] using model: {args.model}")
+    print(f"[info] loaded {len(shots)} shots", flush=True)
 
     # Quick health check
-    print(f"[info] testing model ...")
+    print(f"[info] testing model ...", flush=True)
     try:
         from PIL import Image
         dummy = Image.new("RGB", (224, 224), color=(128, 128, 128))
         dummy_path = REPO_ROOT / "data" / "processed" / "_healthcheck.jpg"
         dummy.save(dummy_path)
         b64 = base64.b64encode(dummy_path.read_bytes()).decode()
-        resp, secs = call_ollama(args.model, "Reply with the word 'ready' only.", b64, timeout=180)
-        print(f"[ok] model responded in {secs:.1f}s: {resp[:50]!r}")
+        # Cloud models need longer timeout for first call (cold start)
+        timeout = 180 if "ollama.com" in base else 60
+        resp, secs = call_ollama(args.model, "Reply with the word 'ready' only.", b64, timeout=timeout)
+        print(f"[ok] model responded in {secs:.1f}s: {resp[:50]!r}", flush=True)
         dummy_path.unlink(missing_ok=True)
     except Exception as e:
         print(f"[error] model health check failed: {e}")
-        print(f"  ensure ollama is running and model is pulled: ollama pull {args.model}")
+        print(f"  - if using cloud: check OLLAMA_API_KEY in .env")
+        print(f"  - if using local: ensure ollama is running and model is pulled: ollama pull {args.model}")
         return 1
 
     print(f"\n[info] analyzing {len(shots)} shots × {len(QUESTIONS)} questions = "
-          f"{len(shots) * len(QUESTIONS)} total calls")
+          f"{len(shots) * len(QUESTIONS)} total calls", flush=True)
     rows, stats = analyze_shots(args.model, shots, PROCESSED / "frames")
 
     # Write CSV

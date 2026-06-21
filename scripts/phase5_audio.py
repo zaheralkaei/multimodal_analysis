@@ -74,7 +74,12 @@ def slice_audio(audio_path: Path, window_sec: float = 5.0):
     data, sr = sf.read(str(audio_path), dtype="float32")
     if data.ndim > 1:
         data = data.mean(axis=1)  # mono
-    win = int(window_sec * sr)
+    # CLAP requires 48kHz; resample if needed
+    if sr != 48000:
+        import librosa
+        data = librosa.resample(data, orig_sr=sr, target_sr=48000)
+        sr = 48000
+    win = int(window_sec * sr)  # sr is now 48000 after resampling
     for i in range(0, len(data), win):
         chunk = data[i : i + win]
         if len(chunk) < win // 2:  # skip trailing half-windows
@@ -87,7 +92,7 @@ def compute_window_similarities(model, processor, audio_chunk, sr) -> dict:
     import numpy as np
     import torch
     inputs = processor(
-        audios=[audio_chunk],
+        audio=[audio_chunk],
         sampling_rate=sr,
         text=ALL_TAGS,
         return_tensors="pt",

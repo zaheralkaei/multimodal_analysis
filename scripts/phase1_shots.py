@@ -11,14 +11,16 @@ We extracted at 1fps, so we tell TransNetV2 to use fps=1.
 Model weights live in /tmp/transnetv2-pytorch-weights.pth (downloaded from HF).
 """
 from __future__ import annotations
-import argparse, json, sys
+import argparse, json, os, sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROCESSED = REPO_ROOT / "data" / "processed"
 FRAMES_DIR = PROCESSED / "frames"
-WEIGHTS_PATH = Path("/tmp/transnetv2-pytorch-weights.pth")
-TRANSNET_DIR = Path("/c/Users/zaher/AppData/Local/Temp/TransNetV2/inference-pytorch")
+WEIGHTS_PATH = Path(os.environ.get("TRANSNET_WEIGHTS", r"C:\Users\zaher\AppData\Local\Temp\TransNetV2\inference-pytorch\transnetv2-pytorch-weights.pth"))
+# TransNetV2 PyTorch implementation, vendored from https://github.com/soCzech/TransNetV2
+# Override via TRANSNET_DIR env var if installed elsewhere.
+TRANSNET_DIR = Path(os.environ.get("TRANSNET_DIR", r"C:\Users\zaher\AppData\Local\Temp\TransNetV2\inference-pytorch"))
 
 
 def load_transnetv2():
@@ -36,7 +38,7 @@ def load_transnetv2():
         print(f"  download from https://huggingface.co/MiaoshouAI/transnetv2-pytorch-weights")
         sys.exit(1)
     model = TransNetV2()
-    state_dict = torch.load(str(WEIGHTS_PATH), weights_only=True)
+    state_dict = torch.load(str(WEIGHTS_PATH), weights_only=True, map_location=torch.device("cpu"))
     model.load_state_dict(state_dict)
     model.eval()
     return model
@@ -65,10 +67,12 @@ def detect_shots(model, frames_dir: Path, frame_fps: int = 1) -> list[dict]:
     print(f"[info] running TransNetV2 on shape {video.shape} ...")
     with torch.no_grad():
         single_frame_pred, all_frame_pred = model(torch.from_numpy(video))
-        single_frame_pred = torch.sigmoid(single_frame_pred[0]).cpu().numpy()
+        single_frame_pred = torch.sigmoid(single_frame_pred[0]).cpu().numpy().squeeze()
 
     # A shot boundary is where single_frame_pred > 0.5
-    boundaries = [i for i, p in enumerate(single_frame_pred) if p > 0.5]
+    # Round 9 audit fix: skip boundary at frame 0 (always considered boundary
+    # by TransNetV2 but produces a 0-length shot)
+    boundaries = [i for i, p in enumerate(single_frame_pred) if p > 0.5 and i > 0]
     # Convert frame indices to (start, end) pairs in seconds
     # Frame i is at time i / frame_fps
     starts = [0] + [b for b in boundaries]
@@ -86,7 +90,7 @@ def detect_shots(model, frames_dir: Path, frame_fps: int = 1) -> list[dict]:
             "mid_sec": round(mid_idx / frame_fps, 3),
             "mid_frame_path": str((frames_dir / f"frame_{mid_idx+1:05d}.jpg").relative_to(REPO_ROOT)),
             "n_frames": e - s + 1,
-            "boundary_score": float(single_frame_pred[s]) if s == 0 else float(single_frame_pred[s]),
+            "boundary_score": float(single_frame_pred[s].item()) if hasattr(single_frame_pred[s], "item") else float(single_frame_pred[s]),
         })
     print(f"[ok] detected {len(shots)} shots")
     return shots, single_frame_pred.tolist()

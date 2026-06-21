@@ -92,7 +92,12 @@ def main() -> int:
         print(f"\n[stats] {len(non_empty)}/{len(segments)} segments have text "
               f"(avg logprob {avg_conf:.2f}; "
               f"avg no-speech prob {sum(s['no_speech_prob'] for s in segments)/len(segments):.2f})")
-        if segments[:5]:
+            # Daydreaming is famously quiet/whispered - Whisper often returns 0 segments.
+    # This is a real characteristic, not a bug.
+    if not segments:
+        print("\n[note] 0 segments detected. Daydreaming is whispered/sung at low volume")
+        print("       — Whisper's VAD often filters out all speech. See README for this finding.")
+    elif segments[:5]:
             print("\n[sample] first 5 segments:")
             for s in segments[:5]:
                 print(f"  {s['start_sec']:>6.2f}-{s['end_sec']:>6.2f}s  {s['text'][:80]}")
