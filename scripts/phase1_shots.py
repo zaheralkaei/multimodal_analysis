@@ -26,11 +26,13 @@ Parameters you can tune:
   --min-scene-len  15  minimum shot length in frames (avoids flicker detection)
 """
 from __future__ import annotations
-import argparse, json, sys
+import argparse, json, os, sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROCESSED = REPO_ROOT / "data" / "processed"
+if "PROCESSED_DIR" in os.environ:
+    PROCESSED = Path(os.environ["PROCESSED_DIR"])
 RAW = REPO_ROOT / "data" / "raw"
 FRAMES_DIR = PROCESSED / "frames"
 
@@ -71,7 +73,9 @@ def detect_shots(video_path: Path, threshold: float, min_scene_len: int) -> list
 
         # Find the closest frame file (1fps extraction)
         mid_frame_idx = int(mid_sec) + 1  # 1-indexed
-        mid_frame_path = f"data/processed/frames/frame_{mid_frame_idx:05d}.jpg"
+        # Path is relative to REPO_ROOT, points to OUR frames dir
+        mid_frame_path = str(FRAMES_DIR / f"frame_{mid_frame_idx:05d}.jpg")
+        mid_frame_path = str(Path(mid_frame_path).relative_to(REPO_ROOT))
         n_frames_in_shot = int(duration) + 1
 
         shots.append({

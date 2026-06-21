@@ -15,12 +15,16 @@ A single-file Plotly HTML dashboard with:
   - "Data quality" section listing which streams had data
 """
 from __future__ import annotations
-import argparse, html as html_lib, json, sys
+import argparse, html as html_lib, json, os, sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROCESSED = REPO_ROOT / "data" / "processed"
+if "PROCESSED_DIR" in os.environ:
+    PROCESSED = Path(os.environ["PROCESSED_DIR"])
 REPORTS = REPO_ROOT / "reports"
+if "REPORTS_DIR" in os.environ:
+    REPORTS = Path(os.environ["REPORTS_DIR"])
 REPORTS.mkdir(exist_ok=True)
 
 

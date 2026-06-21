@@ -11,12 +11,14 @@ flow), 5 fps is 4× the storage for marginal gain, 24 fps is overkill.
 2 fps gives 0.5s time resolution which catches pan/tilt/zoom in 1-2s shots.
 """
 from __future__ import annotations
-import argparse, json, subprocess, sys
+import argparse, json, os, subprocess, sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = REPO_ROOT / "data"
 PROCESSED = DATA_DIR / "processed"
+if "PROCESSED_DIR" in os.environ:
+    PROCESSED = Path(os.environ["PROCESSED_DIR"])
 RAW = DATA_DIR / "raw"
 FRAMES_DIR = PROCESSED / "frames"
 

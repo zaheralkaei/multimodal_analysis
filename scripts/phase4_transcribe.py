@@ -14,11 +14,13 @@ Note: Whisper is trained on speech, not music. On sung lyrics it often works
 rap, results may be noisy — check the output manually.
 """
 from __future__ import annotations
-import argparse, json, sys, time
+import argparse, json, os, sys, time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROCESSED = REPO_ROOT / "data" / "processed"
+if "PROCESSED_DIR" in os.environ:
+    PROCESSED = Path(os.environ["PROCESSED_DIR"])
 
 
 def transcribe(audio_path: Path, model_size: str = "small.en",

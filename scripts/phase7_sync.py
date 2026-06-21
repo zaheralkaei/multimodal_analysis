@@ -22,11 +22,13 @@ Cross-modal signals computed:
   - combined_emotion_score: rough alignment of visual emotion with audio mood
 """
 from __future__ import annotations
-import argparse, csv, json, sys
+import argparse, csv, json, os, sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROCESSED = REPO_ROOT / "data" / "processed"
+if "PROCESSED_DIR" in os.environ:
+    PROCESSED = Path(os.environ["PROCESSED_DIR"])
 
 
 def load_csv(path: Path) -> list[dict]:

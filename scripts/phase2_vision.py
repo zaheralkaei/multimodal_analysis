@@ -24,6 +24,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROCESSED = REPO_ROOT / "data" / "processed"
+if "PROCESSED_DIR" in os.environ:
+    PROCESSED = Path(os.environ["PROCESSED_DIR"])
 
 # Load .env for OLLAMA_API_KEY, OLLAMA_BASE_URL, etc.
 sys.path.insert(0, str(Path(__file__).parent))

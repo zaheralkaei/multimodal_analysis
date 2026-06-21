@@ -12,11 +12,13 @@ of mood / section / instrument tags. Output is a per-time feature matrix
 you can correlate with visual analysis.
 """
 from __future__ import annotations
-import argparse, json, sys, time
+import argparse, json, os, sys, time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROCESSED = REPO_ROOT / "data" / "processed"
+if "PROCESSED_DIR" in os.environ:
+    PROCESSED = Path(os.environ["PROCESSED_DIR"])
 
 
 # Fixed vocabulary — chosen for music-video analysis.

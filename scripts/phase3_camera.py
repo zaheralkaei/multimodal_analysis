@@ -12,11 +12,13 @@ This is faster and more reliable than asking a vision-language model "is this
 a pan?" for every shot.
 """
 from __future__ import annotations
-import argparse, csv, json, sys
+import argparse, csv, json, os, sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROCESSED = REPO_ROOT / "data" / "processed"
+if "PROCESSED_DIR" in os.environ:
+    PROCESSED = Path(os.environ["PROCESSED_DIR"])
 FRAMES_DIR = PROCESSED / "frames"
 
 
