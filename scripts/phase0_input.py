@@ -96,8 +96,18 @@ def extract_audio(video: Path, out_wav: Path) -> None:
 
 
 def extract_frames(video: Path, out_dir: Path, fps: int = 1) -> int:
-    """Extract one frame every N seconds. Returns frame count."""
+    """Extract one frame every N seconds. Returns frame count.
+
+    Clears any existing frame_*.jpg before extracting to avoid counter
+    overlap and stale frames from a previous video.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Clear stale frames (from a previous run with different video or fps)
+    stale = sorted(out_dir.glob("frame_*.jpg"))
+    if stale:
+        for f in stale:
+            f.unlink()
+        print(f"[info] cleared {len(stale)} stale frames from {out_dir.relative_to(REPO_ROOT)}/")
     cmd = [
         "ffmpeg", "-y", "-i", str(video),
         "-vf", f"fps={fps}",

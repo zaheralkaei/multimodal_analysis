@@ -23,9 +23,13 @@ if "PROCESSED_DIR" in os.environ:
     PROCESSED = Path(os.environ["PROCESSED_DIR"])
 
 
-def transcribe(audio_path: Path, model_size: str = "small.en",
+def transcribe(audio_path: Path, model_size: str = "small",
                language: str | None = None, beam_size: int = 5) -> list[dict]:
-    """Run faster-whisper. Returns list of segment dicts."""
+    """Run faster-whisper. Returns list of segment dicts.
+
+    Default model is 'small' (multilingual, auto-detects language).
+    Use 'small.en' for English-only (smaller, faster).
+    """
     from faster_whisper import WhisperModel
 
     print(f"[info] loading whisper model: {model_size} (cpu int8)")
