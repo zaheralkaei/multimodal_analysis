@@ -36,7 +36,8 @@ data/
     ├── shot_camera.csv
     ├── transcript.json
     ├── audio_clap.csv
-    ├── music_features.json
+    ├── music_features.csv
+    ├── music_summary.json
     ├── sync_per_shot.csv
     └── sync_stats.json
 reports/

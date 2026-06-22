@@ -198,7 +198,8 @@ multimodal_analysis/
 │       ├── shot_camera.csv           ← OpenCV per-shot motion
 │       ├── transcript.json           ← Whisper segments
 │       ├── audio_clap.csv            ← CLAP scores per 5s window
-│       ├── music_features.json       ← tempo, key, beats
+│       ├── music_features.csv       ← per-second features (tempo, beats, RMS)
+│       ├── music_summary.json        ← tempo, key, beat count
 │       ├── sync_per_shot.csv         ← joined table (one row per shot)
 │       └── sync_stats.json
 ├── reports/
@@ -340,6 +341,9 @@ optical flow (already done in phase 3) for camera motion — see
   frame-rate sensitivity analysis
 - [docs/PLAN_ROUND_2.md](docs/PLAN_ROUND_2.md) — round-2 audit plan
 - [docs/STRUCTURE_V3.md](docs/STRUCTURE_V3.md) — folder naming history
+
+- [docs/AUDIT.md](docs/AUDIT.md) — round-3 audit report
+  (code quality, data correctness, methodology, engineering hygiene)
 
 ## License
 

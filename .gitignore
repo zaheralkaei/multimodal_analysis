@@ -54,6 +54,3 @@ logs/*.log
 .env
 .env.local
 .env.*.local
-
-# Analysis scratch directory
-analysis/
