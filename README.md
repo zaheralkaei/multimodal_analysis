@@ -345,6 +345,9 @@ optical flow (already done in phase 3) for camera motion — see
 - [docs/AUDIT.md](docs/AUDIT.md) — round-3 audit report
   (code quality, data correctness, methodology, engineering hygiene)
 
+- [docs/METHODOLOGY_REVIEW.md](docs/METHODOLOGY_REVIEW.md) — alternatives
+  to current shot detection, camera motion, transcription (free + paid)
+
 ## License
 
 Pipeline code: MIT. Data sources: see [docs/STRUCTURE_V3.md](docs/STRUCTURE_V3.md)
