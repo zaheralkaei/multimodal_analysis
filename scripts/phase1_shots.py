@@ -1,197 +1,178 @@
 """
 Phase 1 — Shot boundary detection with PySceneDetect.
 
-Reads:  data/processed/metadata.json + frames/frame_*.jpg + source video (from Phase 0)
-Writes: data/processed/shots.json — list of {start_sec, end_sec, mid_sec, mid_frame_path}
-        data/processed/shot_predictions.csv — per-frame scene scores (debug)
-        data/processed/shot_detection_stats.json — detection metadata
+Reads:  <PROCESSED>/metadata.json + frames/frame_*.jpg + source video (from Phase 0)
+Writes: <PROCESSED>/shots.json — list of {start_sec, end_sec, mid_sec, mid_frame_path, key_frame_paths}
+        <PROCESSED>/shot_predictions.csv — per-frame boundary flags (debug)
+        <PROCESSED>/shot_detection_stats.json — detection metadata
 
-Uses PySceneDetect (https://github.com/Breakthrough/PySceneDetect, BSD-3-Clause)
-with the **ContentDetector** algorithm. This is the most versatile detector:
+Uses PySceneDetect (https://github.com/Breakthrough/PySceneDetect, BSD-3-Clause).
 
-  - Splits frames into 4x4 pixel blocks in HSV color space
-  - For each block, computes a delta from the previous frame
-  - Sum of deltas > threshold = scene change
-  - Detects both **hard cuts** AND **gradual transitions** (fades, dissolves,
-    whip pans) that TransNetV2 tends to miss
+Detectors (--detector):
+  adaptive (default)  AdaptiveDetector: compares each frame's HSV/edge change to
+                      a rolling average of its neighbours, so fast camera
+                      motion or flashing lights (common in music videos) cause
+                      fewer false cuts than a fixed threshold.
+  content             ContentDetector with a fixed threshold (the round-1/2
+                      behaviour, --threshold 35).
 
-Why not TransNetV2?
-  - Bias toward hard cuts; misses smooth transitions common in modern music videos
-  - On Tyla's "SHE DID IT AGAIN", TransNetV2 detected 2 shots (212s + 2s trailing)
-    when the video clearly has 20+ transitions
-  - PySceneDetect's ContentDetector found 4x more boundaries on the same video
+Both are HARD-CUT detectors. --fades (on by default) adds ThresholdDetector
+for fades to/from black. Cross-dissolves are still not detected; that needs a
+learned model such as TransNetV2 (see docs/METHODOLOGY_REVIEW.md).
 
-Parameters you can tune:
-  --threshold  35.0     weighted HSV + edge delta threshold between frames
-  --min-scene-len  30  minimum shot length in frames (avoids flicker detection)
+Each shot also gets three key frames (at 15%, 50%, 85% of its duration) that
+Phase 2 sends to the vision model, so it can see change within the shot.
 """
 from __future__ import annotations
-import argparse, json, math, os, sys
+import argparse, bisect, csv, json, sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-PROCESSED = REPO_ROOT / "data" / "processed"
-if "PROCESSED_DIR" in os.environ:
-    PROCESSED = Path(os.environ["PROCESSED_DIR"])
-RAW = REPO_ROOT / "data" / "raw"
-FRAMES_DIR = PROCESSED / "frames"
+from common import (FRAMES_DIR, PROCESSED, RAW, count_frames, display_path,
+                    frame_for_time, frame_fps as load_frame_fps, frame_path,
+                    frames_in_range, load_metadata, record_run)
+
+KEY_FRAME_POSITIONS = (0.15, 0.5, 0.85)
 
 
-def load_metadata() -> dict:
-    """Read Phase 0's metadata.json (empty dict if missing)."""
-    meta_path = PROCESSED / "metadata.json"
-    if meta_path.exists():
-        return json.loads(meta_path.read_text(encoding="utf-8"))
-    return {}
+def _secs(tc) -> float:
+    """FrameTimecode → seconds (works on PySceneDetect 0.6 and 0.7)."""
+    return float(tc.seconds) if hasattr(type(tc), "seconds") else float(tc.get_seconds())
 
 
-def frame_for_time(t: float, frame_fps: float, n_extracted: int) -> int:
-    """1-indexed frame_%05d.jpg number nearest to time t.
-
-    ffmpeg's fps filter emits output frame k (0-indexed) at t = k / frame_fps
-    and names it frame_{k+1}.
-    """
-    idx = int(round(t * frame_fps)) + 1
-    if n_extracted:
-        idx = min(idx, n_extracted)
-    return max(1, idx)
+def _frames(tc) -> int:
+    return int(tc.frame_num) if hasattr(type(tc), "frame_num") else int(tc.get_frames())
 
 
-def detect_shots(video_path: Path, threshold: float, min_scene_len: int,
-                 frame_fps: float = 1.0) -> tuple[list[dict], float, int]:
-    """Run PySceneDetect ContentDetector on the video. Returns shot list."""
-    from scenedetect import open_video, SceneManager, ContentDetector
+def build_detectors(detector: str, threshold: float, adaptive_threshold: float,
+                    min_scene_len: int, fades: bool) -> list:
+    from scenedetect import AdaptiveDetector, ContentDetector, ThresholdDetector
+    weights = ContentDetector.Components(delta_hue=1.0, delta_sat=1.0, delta_lum=1.0, delta_edges=2.0)
+    if detector == "content":
+        dets = [ContentDetector(threshold=threshold, min_scene_len=min_scene_len, weights=weights)]
+    else:
+        dets = [AdaptiveDetector(adaptive_threshold=adaptive_threshold, min_scene_len=min_scene_len,
+                                 weights=weights)]
+    if fades:
+        dets.append(ThresholdDetector(threshold=12, min_scene_len=min_scene_len))
+    return dets
 
-    # Open video
-    video = open_video(str(video_path))
-    fps = video.frame_rate
-    total_frames = video.duration.get_frames() if hasattr(video.duration, "get_frames") else 0
-    print(f"[info] video: {video_path.name}, fps={fps:.2f}, frames={total_frames}")
 
-    # Build scene manager + detector
-    sm = SceneManager()
-    sm.add_detector(ContentDetector(
-        threshold=threshold,
-        min_scene_len=min_scene_len,
-        weights=ContentDetector.Components(
-            delta_hue=1.0, delta_sat=1.0, delta_lum=1.0, delta_edges=2.0
-        ),  # delta_edges=2 helps catch fades
-    ))
-
-    # Run detection
-    sm.detect_scenes(video, show_progress=False)
-    scene_list = sm.get_scene_list()  # [(start, end), ...] as FrameTimecode pairs
-
-    # Convert to our shot schema
-    n_extracted = len(list(FRAMES_DIR.glob("frame_*.jpg")))
+def shots_from_boundaries(bounds: list[tuple[float, float]], frame_fps: float,
+                          n_extracted: int) -> list[dict]:
+    """Turn (start_sec, end_sec) pairs into our shot schema."""
     shots = []
-    for idx, (start_tc, end_tc) in enumerate(scene_list):
-        start_sec = start_tc.get_seconds()
-        end_sec = end_tc.get_seconds()
-        # The end_tc is exclusive — last frame is actually the start of the next shot
-        # So duration is end_sec - start_sec
+    for idx, (start_sec, end_sec) in enumerate(bounds):
         duration = end_sec - start_sec
         mid_sec = (start_sec + end_sec) / 2
-
-        # Find the extracted frame closest to the shot's midpoint
-        mid_frame_idx = frame_for_time(mid_sec, frame_fps, n_extracted)
-        # Path is relative to REPO_ROOT, points to OUR frames dir
-        mid_frame_path = str(FRAMES_DIR / f"frame_{mid_frame_idx:05d}.jpg")
-        mid_frame_path = str(Path(mid_frame_path).relative_to(REPO_ROOT))
-        # Extracted frames whose timestamp k/frame_fps falls in [start, end)
-        n_frames_in_shot = max(0, math.ceil(end_sec * frame_fps) - math.ceil(start_sec * frame_fps))
-
+        key_paths = [display_path(frame_path(frame_for_time(start_sec + p * duration, frame_fps, n_extracted)))
+                     for p in KEY_FRAME_POSITIONS]
         shots.append({
             "shot_idx": idx,
             "start_sec": round(start_sec, 3),
             "end_sec": round(end_sec, 3),
             "duration_sec": round(duration, 3),
             "mid_sec": round(mid_sec, 3),
-            "mid_frame_path": mid_frame_path,
-            "n_frames": n_frames_in_shot,
+            "mid_frame_path": display_path(frame_path(frame_for_time(mid_sec, frame_fps, n_extracted))),
+            "key_frame_paths": key_paths,
+            # Extracted frames whose timestamp falls in [start, end)
+            "n_frames": len(frames_in_range(start_sec, end_sec, frame_fps)),
         })
-    return shots, fps, total_frames
+    return shots
+
+
+def detect_shots(video_path: Path, detectors: list, frame_fps: float = 1.0) -> tuple[list[dict], float, int]:
+    """Run PySceneDetect on the video. Returns (shots, video_fps, total_frames)."""
+    from scenedetect import SceneManager, open_video
+
+    video = open_video(str(video_path))
+    fps = float(video.frame_rate)
+    total_frames = _frames(video.duration)
+    print(f"[info] video: {video_path.name}, fps={fps:.2f}, frames={total_frames}")
+
+    sm = SceneManager()
+    for d in detectors:
+        sm.add_detector(d)
+    sm.detect_scenes(video, show_progress=False)
+    scene_list = sm.get_scene_list()  # [(start, end), ...]; end is exclusive
+    if not scene_list:  # no cut found: the whole video is one shot
+        bounds = [(0.0, total_frames / fps)]
+    else:
+        bounds = [(_secs(s), _secs(e)) for s, e in scene_list]
+    return shots_from_boundaries(bounds, frame_fps, count_frames()), fps, total_frames
+
+
+def write_predictions(path: Path, shots: list[dict], fps: float, total_frames: int) -> None:
+    """Per-video-frame boundary flag + shot index (debug / detector comparison)."""
+    starts = [s["start_sec"] for s in shots]
+    boundary_frames = {int(round(s * fps)) for s in starts}
+    with path.open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["frame", "time_sec", "is_boundary", "shot_idx"])
+        for frame_idx in range(total_frames):
+            t = frame_idx / fps
+            k = bisect.bisect_right(starts, t) - 1
+            shot_idx = shots[k]["shot_idx"] if k >= 0 and t < shots[k]["end_sec"] else -1
+            w.writerow([frame_idx, round(t, 3), int(frame_idx in boundary_frames), shot_idx])
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--detector", choices=["adaptive", "content"], default="adaptive",
+                        help="cut detector (default adaptive)")
     parser.add_argument("--threshold", type=float, default=35.0,
-                       help="ContentDetector threshold (default 35.0, lower = more sensitive)")
+                        help="ContentDetector threshold, --detector content only (default 35.0)")
+    parser.add_argument("--adaptive-threshold", type=float, default=3.0,
+                        help="AdaptiveDetector ratio threshold (default 3.0, lower = more sensitive)")
     parser.add_argument("--min-scene-len", type=int, default=30,
-                       help="Minimum shot length in frames (default 30 ≈ 1.25s at 24fps)")
+                        help="Minimum shot length in frames (default 30 ≈ 1.25s at 24fps)")
+    parser.add_argument("--no-fades", dest="fades", action="store_false",
+                        help="disable fade-to/from-black detection")
     parser.add_argument("--video", default=None,
-                       help="Path to source video (default: source_file from Phase 0's metadata.json)")
+                        help="Path to source video (default: source_file from Phase 0's metadata.json)")
     args = parser.parse_args()
 
     metadata = load_metadata()
-    frame_fps = float(metadata.get("frame_fps") or 1)
+    frame_fps = load_frame_fps()
     video_path = Path(args.video or metadata.get("source_file") or RAW / "video.mp4")
     if not video_path.exists():
         print(f"[error] video not found: {video_path}")
         print("  run phase 0 first: python scripts/phase0_input.py <source>")
         return 1
 
-    print(f"[info] PySceneDetect ContentDetector")
-    print(f"  threshold = {args.threshold}")
-    print(f"  min_scene_len = {args.min_scene_len} frames")
-
-    shots, fps, total_frames = detect_shots(video_path, args.threshold, args.min_scene_len, frame_fps)
+    params = {"detector": args.detector, "threshold": args.threshold,
+              "adaptive_threshold": args.adaptive_threshold,
+              "min_scene_len_frames": args.min_scene_len, "fades": args.fades}
+    print(f"[info] PySceneDetect: {params}")
+    detectors = build_detectors(args.detector, args.threshold, args.adaptive_threshold,
+                                args.min_scene_len, args.fades)
+    shots, fps, total_frames = detect_shots(video_path, detectors, frame_fps)
     print(f"[ok] detected {len(shots)} shots")
 
-    # Write shots.json
     out_path = PROCESSED / "shots.json"
     out_path.write_text(json.dumps(shots, indent=2) + "\n", encoding="utf-8")
-    print(f"[ok] wrote {out_path.relative_to(REPO_ROOT)} ({len(shots)} shots)")
+    print(f"[ok] wrote {display_path(out_path)} ({len(shots)} shots)")
 
-    # Write per-frame predictions (for debugging). For PySceneDetect we record
-    # which frames are at shot boundaries. Useful for comparing detectors.
-    import csv
     pred_path = PROCESSED / "shot_predictions.csv"
-    # Build a frame → "is_boundary" map
-    boundary_frames = set()
-    for s in shots:
-        boundary_frames.add(int(round(s["start_sec"] * fps)))
-    with pred_path.open("w", encoding="utf-8", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["frame", "time_sec", "is_boundary", "shot_idx"])
-        for frame_idx in range(total_frames):
-            t = frame_idx / fps
-            is_boundary = 1 if frame_idx in boundary_frames else 0
-            shot_idx = -1
-            for s in shots:
-                if s["start_sec"] <= t < s["end_sec"]:
-                    shot_idx = s["shot_idx"]
-                    break
-            w.writerow([frame_idx, round(t, 3), is_boundary, shot_idx])
-    print(f"[ok] wrote {pred_path.relative_to(REPO_ROOT)} ({total_frames} rows)")
+    write_predictions(pred_path, shots, fps, total_frames)
+    print(f"[ok] wrote {display_path(pred_path)} ({total_frames} rows)")
 
-    # Write stats
-    from fractions import Fraction
-    def _to_jsonable(o):
-        if isinstance(o, Fraction):
-            return float(o)
-        if hasattr(o, "get_seconds"):
-            return float(o.get_seconds())
-        if hasattr(o, "get_frames"):
-            return int(o.get_frames())
-        return str(o)
-
+    durations = [s["duration_sec"] for s in shots]
     stats = {
-        "detector": "PySceneDetect-ContentDetector",
+        "detector": f"PySceneDetect-{'Adaptive' if args.detector == 'adaptive' else 'Content'}Detector"
+                    + ("+ThresholdDetector(fades)" if args.fades else ""),
         "detector_version": _get_scenedetect_version(),
-        "threshold": args.threshold,
-        "min_scene_len_frames": args.min_scene_len,
-        "fps": round(float(fps), 3),
+        **params,
+        "fps": round(fps, 3),
         "total_frames": int(total_frames),
         "n_shots": len(shots),
-        "avg_shot_duration_sec": round(sum(s["duration_sec"] for s in shots) / max(1, len(shots)), 3),
-        "min_shot_duration_sec": round(min((s["duration_sec"] for s in shots), default=0), 3),
-        "max_shot_duration_sec": round(max((s["duration_sec"] for s in shots), default=0), 3),
-        "video_path": _display_path(video_path),
+        "avg_shot_duration_sec": round(sum(durations) / max(1, len(shots)), 3),
+        "min_shot_duration_sec": round(min(durations, default=0), 3),
+        "max_shot_duration_sec": round(max(durations, default=0), 3),
+        "video_path": display_path(video_path),
     }
     stats_path = PROCESSED / "shot_detection_stats.json"
     stats_path.write_text(json.dumps(stats, indent=2) + "\n", encoding="utf-8")
-    print(f"[ok] wrote {stats_path.relative_to(REPO_ROOT)}")
+    print(f"[ok] wrote {display_path(stats_path)}")
 
     if shots:
         print(f"\n[stats] {len(shots)} shots, "
@@ -199,16 +180,10 @@ def main() -> int:
               f"min {stats['min_shot_duration_sec']:.1f}s, "
               f"max {stats['max_shot_duration_sec']:.1f}s")
 
-    print(f"\n[next] Phase 2: python scripts/phase2_vision.py")
+    record_run(1, inputs=[video_path, PROCESSED / "metadata.json", FRAMES_DIR],
+               outputs=[out_path, pred_path, stats_path], params=params)
+    print("\n[next] Phase 2: python scripts/phase2_vision.py")
     return 0
-
-
-def _display_path(p: Path) -> str:
-    """Repo-relative path when possible (local sources may live outside the repo)."""
-    try:
-        return str(p.resolve().relative_to(REPO_ROOT))
-    except ValueError:
-        return str(p)
 
 
 def _get_scenedetect_version() -> str:

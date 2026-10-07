@@ -1,0 +1,26 @@
+[project]
+name = "multimodal-analysis"
+version = "0.3.0"
+description = "Shot-level multimodal analysis of music videos (vision, camera, lyrics, audio mood, music structure)"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 130
+target-version = "py310"
+extend-exclude = ["experiments"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B"]
+ignore = [
+  "E401",  # several imports on one line is the house style
+  "E731",  # lambda assignment
+  "B905",  # zip(strict=) needs Python 3.10+ semantics everywhere; not worth the noise
+]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/phase8_dashboard.py" = ["E501"]  # long HTML prose
+"scripts/_normalize_emotion.py" = ["E501"]  # one synonym list per line

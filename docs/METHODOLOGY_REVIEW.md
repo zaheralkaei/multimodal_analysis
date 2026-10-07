@@ -94,7 +94,7 @@ pan-left/right, tilt-up/down, zoom-in/out, or static.
 
 ### Why we don't use the VLM for this
 
-Tested in `scripts/_test_multi_image2.py` and `docs/CAMERA_DETECTION.md`:
+Tested in `experiments/test_multi_image2.py` and `docs/CAMERA_DETECTION.md`:
 sending 2-4 frames per shot to Gemini and asking "what camera motion is
 happening?" gave:
 - Tyla: 70/72 "static" (correct on 14, wrong on 58)

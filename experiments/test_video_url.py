@@ -2,12 +2,13 @@
 import urllib.request, json, time
 from pathlib import Path
 
-env_lines = open(r"C:\github_projects\multimodal_analysis\.env").read().splitlines()
-key = None
-for line in env_lines:
-    if line.startswith("OLLAMA_API_KEY="):
-        key = line.split("=", 1)[1].strip()
-        break
+import os, sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+from _env import load_env  # noqa: E402
+from common import PROCESSED  # noqa: E402  (set PROCESSED_DIR=data/<video_id>)
+load_env()
+key = os.environ.get("OLLAMA_API_KEY")
 
 if not key:
     print("[error] no OLLAMA_API_KEY in .env")

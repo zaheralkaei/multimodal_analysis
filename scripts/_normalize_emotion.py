@@ -13,6 +13,9 @@ Canonical emotions (match the JSON-mode prompt in phase2_vision.py):
     sensual, energetic, melancholic, anxious, playful, romantic, intense, confident
 """
 from __future__ import annotations
+import re
+
+MAX_PHRASE_WORDS = 4
 
 # Map of canonical emotion → list of synonyms (lowercase, normalized)
 CANONICAL_EMOTIONS = {
@@ -23,14 +26,14 @@ CANONICAL_EMOTIONS = {
     "surprised":    ["surprised", "shocked", "amazed", "astonished", "stunned", "startled", "bewildered"],
     "disgusted":    ["disgusted", "disgust", "repulsed", "revulsion", "contempt"],
     "neutral":      ["neutral", "calm", "indifferent", "composed", "detached", "objective", "none", "none (no people)"],
-    "contemplative":["contemplative", "thoughtful", "pensive", "reflective", "meditative", "wistful", "introspective", "brooding", "yearning", "hopeful"],
+    "contemplative":["contemplative", "thoughtful", "pensive", "reflective", "meditative", "introspective", "brooding", "yearning", "hopeful"],
     "sensual":      ["sensual", "sultry", "seductive", "seduct", "intimate", "lustful", "provocative", "passionate", "sultry intent", "sensual intensity", "sultry/confident"],
     "energetic":    ["energetic", "vigorous", "lively", "spirited", "dynamic", "vibrant", "exhilarated", "pumped", "excited", "energetic, intense"],
     "melancholic":  ["melancholic", "melancholy", "wistful", "longing", "mournful", "doleful", "plaintive", "blue", "forlorn"],
     "anxious":      ["anxious", "anxiety", "worried", "nervous", "uneasy", "apprehensive", "tense", "distressed", "stressed", "agitated"],
     "playful":      ["playful", "mischievous", "teasing", "flirtatious", "whimsical", "fun", "frolicsome"],
     "romantic":     ["romantic", "tender", "loving", "affectionate", "amorous", "sentimental"],
-    "intense":      ["intense", "fierce", "fervent", "vehement", "intense or fierce", "intense focus", "serious intensity", "fierce", "in pain/suffering"],
+    "intense":      ["intense", "fierce", "fervent", "vehement", "intense or fierce", "intense focus", "serious intensity", "in pain/suffering"],
     "confident":    ["confident", "assured", "self-assured", "bold", "commanding", "dominant", "empowered", "confident/seductive"],
 }
 
@@ -62,13 +65,15 @@ def normalize_emotion(raw: str) -> str:
             text = text.split(suffix)[0].strip()
     if text in _SYNONYM_TO_CANONICAL:
         return _SYNONYM_TO_CANONICAL[text]
-    # Substring match (find longest synonym that appears in the text)
-    best = None
-    best_len = 0
+    # Short phrases ("sultry gaze", "deeply sad"): longest synonym that appears
+    # as whole word(s). Longer text is model commentary ("Based on the body
+    # language and downcast expressions...") and is not guessed at.
+    if len(text.split()) > MAX_PHRASE_WORDS:
+        return "other"
+    best, best_len = None, 0
     for syn, canonical in _SYNONYM_TO_CANONICAL.items():
-        if syn in text and len(syn) > best_len:
-            best = canonical
-            best_len = len(syn)
+        if len(syn) > best_len and re.search(rf"(?<![a-z]){re.escape(syn)}(?![a-z])", text):
+            best, best_len = canonical, len(syn)
     return best or "other"
 
 

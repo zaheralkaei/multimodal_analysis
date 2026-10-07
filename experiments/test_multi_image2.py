@@ -3,16 +3,17 @@ import urllib.request, json, base64, csv, time
 from pathlib import Path
 
 # Load API key from .env
-env_lines = open(r"C:\github_projects\multimodal_analysis\.env").read().splitlines()
-key = None
-for line in env_lines:
-    if line.startswith("OLLAMA_API_KEY="):
-        key = line.split("=", 1)[1].strip()
-        break
+import os, sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+from _env import load_env  # noqa: E402
+from common import PROCESSED  # noqa: E402  (set PROCESSED_DIR=data/<video_id>)
+load_env()
+key = os.environ.get("OLLAMA_API_KEY")
 
 # Read shot camera to find a motion shot
-cams = list(csv.DictReader(open(r"C:\github_projects\multimodal_analysis\data\processed\shot_camera.csv", encoding="utf-8")))
-shots = json.loads(Path(r"C:\github_projects\multimodal_analysis\data\processed\shots.json").read_text(encoding="utf-8"))
+cams = list(csv.DictReader(open(PROCESSED / "shot_camera.csv", encoding="utf-8")))
+shots = json.loads((PROCESSED / "shots.json").read_text(encoding="utf-8"))
 
 # Pick a clear motion shot — find one with strong vertical motion
 best = None
@@ -46,7 +47,7 @@ frame_indices = [shot_start + i * step for i in range(n_frames)]
 frame_indices = [min(fi, shot_end) for fi in frame_indices]
 print(f"  Frame indices: {frame_indices}")
 
-frames_dir = Path(r"C:\github_projects\multimodal_analysis\data\processed\frames")
+frames_dir = PROCESSED / "frames"
 images_b64 = []
 for fi in frame_indices:
     fp = frames_dir / f"frame_{fi:05d}.jpg"

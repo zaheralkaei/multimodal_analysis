@@ -1,226 +1,206 @@
 """
-Phase 3 — Camera movement classification via optical flow.
+Phase 3 — Camera movement classification from frame-to-frame motion.
 
-Reads:  data/processed/frames/frame_*.jpg (from Phase 0)
-        data/processed/shots.json (from Phase 1)
-Writes: data/processed/shot_camera.csv — per-shot camera movement classification
+Reads:  <PROCESSED>/frames/frame_*.jpg + metadata.json (from Phase 0)
+        <PROCESSED>/shots.json (from Phase 1)
+Writes: <PROCESSED>/shot_camera.csv — per-shot camera movement classification
 
-Uses OpenCV's calcOpticalFlowFarneback between consecutive frames within each
-shot, then classifies the motion field as: static / pan / tilt / zoom / handheld.
+Method (round 3):
+  1. For each consecutive pair of extracted frames inside a shot, track corner
+     features (Shi-Tomasi + pyramidal Lucas-Kanade).
+  2. Fit a similarity transform (translation + scale + rotation) with RANSAC.
+     The largest consistent motion is the camera (background); people moving
+     independently are rejected as outliers instead of being averaged in, which
+     was the main failure of the previous mean-dense-flow approach.
+  3. Express motion per second and relative to frame size, so thresholds do not
+     depend on resolution or on the extraction fps:
+       pan_speed   = −tx / width  per second  (+ = camera pans right)
+       tilt_speed  = −ty / height per second  (+ = camera tilts down)
+       zoom_rate   = ln(scale)    per second  (+ = zoom in)
+     Signs are inverted for pan/tilt: when the camera pans right, the image
+     content moves left.
+  4. Per shot, take the median of each over all frame pairs and classify:
+       static    all medians below their thresholds and little jitter
+       handheld  medians below thresholds but frame-to-frame jitter is high
+       zoom-in/out, pan-left/right, tilt-up/down
+                 the largest component (relative to its threshold) wins
+       handheld  also when jitter exceeds the net pan/tilt (shake, not a pan)
+       unknown   motion could not be estimated (too few features AND frames differ)
 
-This is faster and more reliable than asking a vision-language model "is this
-a pan?" for every shot.
+Thresholds are CLI flags; defaults are deliberately conservative.
+
+Note: the previous version labelled directions backwards (content moving
+right was called pan-right; outward flow was called zoom-out).
 """
 from __future__ import annotations
-import argparse, csv, json, os, sys
+import argparse, csv, json, sys
+from collections import Counter
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-PROCESSED = REPO_ROOT / "data" / "processed"
-if "PROCESSED_DIR" in os.environ:
-    PROCESSED = Path(os.environ["PROCESSED_DIR"])
-FRAMES_DIR = PROCESSED / "frames"
+from common import (FRAMES_DIR, PROCESSED, display_path, frame_fps as load_frame_fps,
+                    frame_path, frames_in_range, record_run)
+
+DEFAULTS = {
+    "pan_thresh": 0.04,     # fraction of frame width per second
+    "tilt_thresh": 0.04,    # fraction of frame height per second
+    "zoom_thresh": 0.03,    # ln(scale) per second (≈3% size change per second)
+    "jitter_thresh": 0.06,  # std of per-pair pan/tilt speed for "handheld"
+    "min_inliers": 10,
+    "static_diff": 3.0,     # mean abs grey-level difference treated as "no change"
+}
 
 
-def optical_flow_between(img1, img2):
-    """Compute dense optical flow between two grayscale frames."""
+STILL = {"pan_speed": 0.0, "tilt_speed": 0.0, "zoom_rate": 0.0, "inlier_ratio": 1.0}
+
+
+def pair_motion(img1, img2, fps: float, min_inliers: int = 10, static_diff: float = 3.0) -> dict | None:
+    """Camera motion between two BGR frames, or None if it cannot be estimated.
+
+    Low-texture frames (flat colour, darkness) have too few trackable corners;
+    if such a pair is also nearly identical pixel-wise, it is a still pair.
+    """
     import cv2
     import numpy as np
     g1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
     g2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
-    flow = cv2.calcOpticalFlowFarneback(
-        g1, g2, None,
-        pyr_scale=0.5, levels=3, winsize=15,
-        iterations=3, poly_n=5, poly_sigma=1.2, flags=0,
-    )
-    return flow
+    h, w = g1.shape
 
+    def fallback():
+        return dict(STILL) if float(np.mean(cv2.absdiff(g1, g2))) < static_diff else None
 
-def classify_motion(flow) -> dict:
-    """Classify the dominant motion in an optical flow field.
-
-    Returns dict with: dominant_direction, dominant_motion, median_magnitude,
-    pan_score, tilt_score, zoom_score, static_score.
-    """
-    import numpy as np
-    fx = flow[..., 0]
-    fy = flow[..., 1]
-    mag = np.sqrt(fx ** 2 + fy ** 2)
-    med_mag = float(np.median(mag))
-
-    # If flow is tiny, it's static
-    if med_mag < 0.3:
-        return {
-            "dominant_direction": "static",
-            "median_magnitude": med_mag,
-            "pan_score": 0.0,
-            "tilt_score": 0.0,
-            "zoom_score": 0.0,
-            "static_score": 1.0,
-            "n_frames": 0,
-        }
-
-    # Mean flow direction (excluding tiny vectors)
-    mask = mag > 1.0
-    if mask.sum() < 100:
-        mask = mag > 0.5
-    if mask.sum() == 0:
-        return {
-            "dominant_direction": "static",
-            "median_magnitude": med_mag,
-            "pan_score": 0.0, "tilt_score": 0.0, "zoom_score": 0.0, "static_score": 1.0,
-            "n_frames": 0,
-        }
-
-    mean_fx = float(np.mean(fx[mask]))
-    mean_fy = float(np.mean(fy[mask]))
-
-    # Divergence tells us about zoom
-    # fx grows with x position (zoom out = divergent from center, zoom in = convergent)
-    h, w = flow.shape[:2]
-    cy, cx = h / 2, w / 2
-    yy, xx = np.mgrid[0:h, 0:w]
-    # Vector from center
-    rx = xx - cx
-    ry = yy - cy
-    # Divergence = sum over (d fx/dx + d fy/dy)
-    # Simpler: compute correlation between flow direction and outward radial vector
-    radial_x = rx / (np.sqrt(rx ** 2 + ry ** 2) + 1e-6)
-    radial_y = ry / (np.sqrt(rx ** 2 + ry ** 2) + 1e-6)
-    # Dot product: positive = outward (zoom out), negative = inward (zoom in)
-    dot = (fx * radial_x + fy * radial_y)[mask]
-    zoom_score = float(np.clip(np.mean(dot) / 5.0, -1.0, 1.0))
-
-    # Pan: horizontal motion (fx dominant, fy small)
-    pan_score = float(np.clip(mean_fx / 5.0, -1.0, 1.0))
-    tilt_score = float(np.clip(mean_fy / 5.0, -1.0, 1.0))
-
-    # Decide dominant
-    abs_pan, abs_tilt, abs_zoom = abs(pan_score), abs(tilt_score), abs(zoom_score)
-    if abs_zoom > max(abs_pan, abs_tilt) and abs_zoom > 0.2:
-        direction = "zoom-out" if zoom_score > 0 else "zoom-in"
-    elif abs_pan > abs_tilt:
-        direction = "pan-right" if pan_score > 0 else "pan-left"
-    elif abs_tilt > 0.2:
-        direction = "tilt-down" if tilt_score > 0 else "tilt-up"
-    else:
-        direction = "handheld"
-
+    p1 = cv2.goodFeaturesToTrack(g1, maxCorners=400, qualityLevel=0.001, minDistance=max(4, w // 80))
+    if p1 is None or len(p1) < min_inliers:
+        return fallback()
+    p2, status, _ = cv2.calcOpticalFlowPyrLK(g1, g2, p1, None, winSize=(21, 21), maxLevel=3)
+    ok = status.reshape(-1) == 1
+    if ok.sum() < min_inliers:
+        return fallback()
+    a, b = p1[ok].reshape(-1, 2), p2[ok].reshape(-1, 2)
+    M, inliers = cv2.estimateAffinePartial2D(a, b, method=cv2.RANSAC, ransacReprojThreshold=2.0)
+    if M is None or inliers is None or inliers.sum() < min_inliers:
+        return fallback()
+    scale = float(np.hypot(M[0, 0], M[1, 0]))
+    # Translation of the image centre (not of the origin), so a pure zoom about
+    # the centre does not show up as pan/tilt.
+    cx, cy = w / 2, h / 2
+    tx = M[0, 0] * cx + M[0, 1] * cy + M[0, 2] - cx
+    ty = M[1, 0] * cx + M[1, 1] * cy + M[1, 2] - cy
     return {
-        "dominant_direction": direction,
-        "median_magnitude": round(med_mag, 3),
-        "pan_score": round(pan_score, 3),
-        "tilt_score": round(tilt_score, 3),
-        "zoom_score": round(zoom_score, 3),
-        "static_score": 0.0,
-        "n_frames": int(mask.sum()),
+        "pan_speed": float(-tx / w * fps),
+        "tilt_speed": float(-ty / h * fps),
+        "zoom_rate": float(np.log(max(scale, 1e-6)) * fps),
+        "inlier_ratio": float(inliers.sum() / len(a)),
     }
 
 
-def analyze_shots(shots: list[dict], frames_dir: Path, frame_fps: float = 1.0) -> list[dict]:
-    """For each shot, compute optical flow between consecutive frames."""
-    import math
-    import cv2
+def classify_shot(pairs: list[dict], th: dict) -> dict:
+    """Aggregate per-pair motion into one label + summary numbers for the shot."""
     import numpy as np
+    if not pairs:
+        return {"camera_motion": "unknown", "pan": 0.0, "tilt": 0.0, "zoom": 0.0, "jitter": 0.0, "inlier": 0.0}
+    pan = float(np.median([p["pan_speed"] for p in pairs]))
+    tilt = float(np.median([p["tilt_speed"] for p in pairs]))
+    zoom = float(np.median([p["zoom_rate"] for p in pairs]))
+    inlier = float(np.median([p["inlier_ratio"] for p in pairs]))
+    jitter = 0.0
+    if len(pairs) >= 2:
+        jitter = float(max(np.std([p["pan_speed"] for p in pairs]), np.std([p["tilt_speed"] for p in pairs])))
 
+    ratios = {"pan": abs(pan) / th["pan_thresh"], "tilt": abs(tilt) / th["tilt_thresh"],
+              "zoom": abs(zoom) / th["zoom_thresh"]}
+    kind, ratio = max(ratios.items(), key=lambda kv: kv[1])
+    # Shake: frame-to-frame motion that is large but keeps changing direction,
+    # so it outweighs the net (median) pan/tilt.
+    shaky = jitter > th["jitter_thresh"] and jitter > max(abs(pan), abs(tilt))
+    if ratio < 1.0 or shaky:
+        label = "handheld" if jitter > th["jitter_thresh"] else "static"
+    elif kind == "zoom":
+        label = "zoom-in" if zoom > 0 else "zoom-out"
+    elif kind == "pan":
+        label = "pan-right" if pan > 0 else "pan-left"
+    else:
+        label = "tilt-down" if tilt > 0 else "tilt-up"
+    return {"camera_motion": label, "pan": pan, "tilt": tilt, "zoom": zoom, "jitter": jitter, "inlier": inlier}
+
+
+def analyze_shots(shots: list[dict], frames_dir: Path, fps: float, th: dict | None = None) -> list[dict]:
+    """Classify camera motion for every shot."""
+    import cv2
+    th = {**DEFAULTS, **(th or {})}
     rows = []
     for i, shot in enumerate(shots):
-        # Find frame files for this shot: extracted frame k (0-indexed) sits at
-        # t = k / frame_fps and is named frame_{k+1}. Keep frames in [start, end).
-        start_frame = math.ceil(float(shot["start_sec"]) * frame_fps) + 1  # 1-indexed filenames
-        end_frame = math.ceil(float(shot["end_sec"]) * frame_fps)  # inclusive
-        frame_paths = []
-        for fi in range(start_frame, end_frame + 1):
-            p = frames_dir / f"frame_{fi:05d}.jpg"
-            if p.exists():
-                frame_paths.append(p)
-
-        if len(frame_paths) < 2:
-            print(f"[warn] shot {i}: only {len(frame_paths)} frames, skipping")
-            continue
-
-        # Accumulate motion across all frame pairs in this shot
-        all_directions = []
-        all_pan, all_tilt, all_zoom = [], [], []
-        all_mags = []
-        for j in range(len(frame_paths) - 1):
-            img1 = cv2.imread(str(frame_paths[j]))
-            img2 = cv2.imread(str(frame_paths[j + 1]))
-            if img1 is None or img2 is None:
-                continue
-            flow = optical_flow_between(img1, img2)
-            m = classify_motion(flow)
-            all_directions.append(m["dominant_direction"])
-            all_pan.append(m["pan_score"])
-            all_tilt.append(m["tilt_score"])
-            all_zoom.append(m["zoom_score"])
-            all_mags.append(m["median_magnitude"])
-
-        if not all_directions:
-            continue
-
-        # Majority vote on direction
-        from collections import Counter
-        direction_counts = Counter(all_directions)
-        direction = direction_counts.most_common(1)[0][0]
-
+        paths = [p for p in (frame_path(k, frames_dir) for k in
+                             frames_in_range(float(shot["start_sec"]), float(shot["end_sec"]), fps))
+                 if p.exists()]
+        pairs = []
+        prev = cv2.imread(str(paths[0])) if paths else None
+        for p in paths[1:]:
+            cur = cv2.imread(str(p))
+            if prev is not None and cur is not None:
+                m = pair_motion(prev, cur, fps, th["min_inliers"], th["static_diff"])
+                if m is not None:
+                    pairs.append(m)
+            prev = cur
+        c = classify_shot(pairs, th)
+        if len(paths) < 2:
+            c["camera_motion"] = "unknown"  # a single frame cannot show motion
         rows.append({
             "shot_idx": i,
             "start_sec": shot["start_sec"],
             "end_sec": shot["end_sec"],
             "duration_sec": shot["duration_sec"],
-            "n_frames": len(frame_paths),
-            "camera_motion": direction,
-            "pan_score_mean": round(float(np.mean(all_pan)), 3),
-            "tilt_score_mean": round(float(np.mean(all_tilt)), 3),
-            "zoom_score_mean": round(float(np.mean(all_zoom)), 3),
-            "median_motion_magnitude": round(float(np.median(all_mags)), 3),
+            "n_frames": len(paths),
+            "n_pairs_used": len(pairs),
+            "camera_motion": c["camera_motion"],
+            # Kept the round-2 column names; values are now per-second speeds
+            "pan_score_mean": round(c["pan"], 4),
+            "tilt_score_mean": round(c["tilt"], 4),
+            "zoom_score_mean": round(c["zoom"], 4),
+            "jitter": round(c["jitter"], 4),
+            "inlier_ratio": round(c["inlier"], 3),
         })
-
         if (i + 1) % 10 == 0 or i == len(shots) - 1:
-            print(f"  [{i+1}/{len(shots)}] shots classified")
-
+            print(f"  [{i + 1}/{len(shots)}] shots classified")
     return rows
+
+
+CSV_COLS = ["shot_idx", "start_sec", "end_sec", "duration_sec", "n_frames", "n_pairs_used",
+            "camera_motion", "pan_score_mean", "tilt_score_mean", "zoom_score_mean",
+            "jitter", "inlier_ratio"]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    for k, v in DEFAULTS.items():  # every threshold is tunable from the CLI
+        parser.add_argument("--" + k.replace("_", "-"), type=type(v), default=v)
     args = parser.parse_args()
+    th = {k: getattr(args, k) for k in DEFAULTS}
 
     shots_path = PROCESSED / "shots.json"
     if not shots_path.exists():
         print(f"[error] shots.json not found at {shots_path}")
         print("  run phase 1 first")
         return 1
-
     shots = json.loads(shots_path.read_text(encoding="utf-8"))
-    print(f"[info] loaded {len(shots)} shots")
+    fps = load_frame_fps()
+    print(f"[info] loaded {len(shots)} shots; frames at {fps:g} fps; thresholds {th}")
 
-    meta_path = PROCESSED / "metadata.json"
-    metadata = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
-    frame_fps = float(metadata.get("frame_fps") or 1)
-    print(f"[info] frames extracted at {frame_fps:g} fps")
-
-    rows = analyze_shots(shots, FRAMES_DIR, frame_fps)
+    rows = analyze_shots(shots, FRAMES_DIR, fps, th)
 
     out_csv = PROCESSED / "shot_camera.csv"
-    cols = ["shot_idx", "start_sec", "end_sec", "duration_sec", "n_frames",
-            "camera_motion", "pan_score_mean", "tilt_score_mean", "zoom_score_mean",
-            "median_motion_magnitude"]
     with out_csv.open("w", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=cols)
+        w = csv.DictWriter(f, fieldnames=CSV_COLS)
         w.writeheader()
-        for row in rows:
-            w.writerow(row)
+        w.writerows(rows)
 
-    from collections import Counter
     counts = Counter(r["camera_motion"] for r in rows)
-    print(f"\n[ok] wrote {out_csv.relative_to(REPO_ROOT)} ({len(rows)} rows)")
-    print(f"[stats] camera motion distribution:")
+    print(f"\n[ok] wrote {display_path(out_csv)} ({len(rows)} rows)")
+    print("[stats] camera motion distribution:")
     for direction, count in counts.most_common():
-        print(f"   {direction:<14} {count:>4} shots ({count/len(rows)*100:>5.1f}%)")
+        print(f"   {direction:<14} {count:>4} shots ({count / len(rows) * 100:>5.1f}%)")
 
-    print(f"\n[next] Phase 4: python scripts/phase4_transcribe.py")
+    record_run(3, inputs=[shots_path, FRAMES_DIR], outputs=[out_csv], params={**th, "frame_fps": fps})
+    print("\n[next] Phase 4: python scripts/phase4_transcribe.py")
     return 0
 
 

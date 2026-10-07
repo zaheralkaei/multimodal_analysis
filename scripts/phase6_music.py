@@ -1,25 +1,27 @@
 """
 Phase 6 — Music structure analysis with librosa.
 
-Reads:  data/processed/audio.wav (from Phase 0)
-Writes: data/processed/music_features.csv — per-second features
-        data/processed/music_summary.json — global stats (tempo, key, beats)
+Reads:  <PROCESSED>/audio.wav (from Phase 0)
+Writes: <PROCESSED>/music_features.csv — per-second features
+        <PROCESSED>/music_summary.json — global stats (tempo, key, beats)
 
 Extracts:
   - tempo (BPM)
   - beat positions (downbeats)
   - estimated musical key
   - per-second: RMS energy, spectral centroid (brightness), spectral contrast,
-    zero-crossing rate (noisiness)
+    zero-crossing rate (noisiness), onset strength (rhythmic activity)
+
+Features are computed once over the whole track (frame level) and averaged
+per second, rather than re-running each extractor on 1-second slices.
 """
 from __future__ import annotations
-import argparse, json, os, sys
+import argparse, csv, json, sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-PROCESSED = REPO_ROOT / "data" / "processed"
-if "PROCESSED_DIR" in os.environ:
-    PROCESSED = Path(os.environ["PROCESSED_DIR"])
+from common import PROCESSED, display_path, record_run
+
+HOP = 512
 
 
 Krumhansl_SCHMUCKLER = {
@@ -56,7 +58,6 @@ def analyze_music(audio_path: Path):
     """Extract music features. Returns (per_second_rows, summary_dict)."""
     import librosa
     import numpy as np
-    import csv
 
     print(f"[info] loading {audio_path.name} with librosa ...")
     y, sr = librosa.load(str(audio_path), sr=22050, mono=True)
@@ -65,10 +66,10 @@ def analyze_music(audio_path: Path):
 
     # Tempo + beat positions
     print("[info] extracting tempo + beats ...")
-    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
+    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, hop_length=HOP)
     # librosa >= 0.10.2 returns tempo as a 1-element array; NumPy 2 refuses float() on it
     tempo = float(np.atleast_1d(tempo)[0])
-    beat_times = librosa.frames_to_time(beat_frames, sr=sr)
+    beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=HOP)
     print(f"[info] tempo: {float(tempo):.1f} BPM, {len(beat_times)} beats")
 
     # Key estimation via chroma
@@ -78,32 +79,30 @@ def analyze_music(audio_path: Path):
     key, key_corr = estimate_key(chroma_mean)
     print(f"[info] estimated key: {key} (corr {key_corr:.2f})")
 
-    # Per-second features
+    # Per-second features: frame-level once, then mean per second
     print("[info] extracting per-second features ...")
-    n_seconds = int(duration)
+    feats = {
+        "rms_energy": librosa.feature.rms(y=y, hop_length=HOP)[0],
+        "spectral_centroid": librosa.feature.spectral_centroid(y=y, sr=sr, hop_length=HOP)[0],
+        "zero_crossing_rate": librosa.feature.zero_crossing_rate(y, hop_length=HOP)[0],
+        "spectral_contrast": librosa.feature.spectral_contrast(y=y, sr=sr, hop_length=HOP).mean(axis=0),
+        "onset_strength": librosa.onset.onset_strength(y=y, sr=sr, hop_length=HOP),
+    }
+    n_frames = min(len(v) for v in feats.values())
+    frame_sec = np.floor(librosa.frames_to_time(np.arange(n_frames), sr=sr, hop_length=HOP)).astype(int)
+    digits = {"rms_energy": 5, "spectral_centroid": 1, "zero_crossing_rate": 5,
+              "spectral_contrast": 3, "onset_strength": 3}
+    beat_sec = np.floor(beat_times).astype(int)
     rows = []
-    for sec in range(n_seconds):
-        start = sec
-        end = sec + 1
-        y_seg = y[sr * start : sr * end]
-        if len(y_seg) < sr // 2:
+    for sec in range(int(duration)):  # complete seconds only
+        mask = frame_sec == sec
+        if not mask.any():
             continue
-        rms = float(librosa.feature.rms(y=y_seg).mean())
-        centroid = float(librosa.feature.spectral_centroid(y=y_seg, sr=sr).mean())
-        zcr = float(librosa.feature.zero_crossing_rate(y_seg).mean())
-        contrast = float(librosa.feature.spectral_contrast(y=y_seg, sr=sr).mean())
-        # beat in this second?
-        beats_in_sec = [round(float(b), 3) for b in beat_times if start <= b < end]
-        rows.append({
-            "second": sec,
-            "start_sec": start,
-            "end_sec": end,
-            "rms_energy": round(rms, 5),
-            "spectral_centroid": round(centroid, 1),
-            "zero_crossing_rate": round(zcr, 5),
-            "spectral_contrast": round(contrast, 3),
-            "n_beats": len(beats_in_sec),
-        })
+        row = {"second": sec, "start_sec": sec, "end_sec": sec + 1}
+        for name, values in feats.items():
+            row[name] = round(float(values[:n_frames][mask].mean()), digits[name])
+        row["n_beats"] = int((beat_sec == sec).sum())
+        rows.append(row)
     summary = {
         "duration_sec": round(duration, 3),
         "sample_rate": sr,
@@ -118,7 +117,7 @@ def analyze_music(audio_path: Path):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    args = parser.parse_args()
+    parser.parse_args()  # no options; gives --help
 
     audio_path = PROCESSED / "audio.wav"
     if not audio_path.exists():
@@ -128,28 +127,25 @@ def main() -> int:
     rows, summary = analyze_music(audio_path)
 
     # Write per-second CSV
-    import csv
     out_csv = PROCESSED / "music_features.csv"
     cols = ["second", "start_sec", "end_sec", "rms_energy", "spectral_centroid",
-            "zero_crossing_rate", "spectral_contrast", "n_beats"]
+            "zero_crossing_rate", "spectral_contrast", "onset_strength", "n_beats"]
     with out_csv.open("w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()
         for row in rows:
             w.writerow(row)
-    print(f"[ok] wrote {out_csv.relative_to(REPO_ROOT)} ({len(rows)} rows)")
+    print(f"[ok] wrote {display_path(out_csv)} ({len(rows)} rows)")
 
-    # Write summary JSON (without beat_times in printed summary for brevity)
     out_json = PROCESSED / "music_summary.json"
-    printed_summary = {k: v for k, v in summary.items() if k != "beat_times"}
-    printed_summary["n_beat_times_in_json"] = len(summary["beat_times"])
     out_json.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
-    print(f"[ok] wrote {out_json.relative_to(REPO_ROOT)}")
+    print(f"[ok] wrote {display_path(out_json)}")
 
     print(f"\n[stats] tempo: {summary['tempo_bpm']} BPM, key: {summary['key']}, "
           f"{summary['n_beats']} beats across {summary['duration_sec']:.0f}s")
 
-    print(f"\n[next] Phase 7: python scripts/phase7_sync.py")
+    record_run(6, inputs=[audio_path], outputs=[out_csv, out_json], params={"sr": 22050, "hop": HOP})
+    print("\n[next] Phase 7: python scripts/phase7_sync.py")
     return 0
 
 

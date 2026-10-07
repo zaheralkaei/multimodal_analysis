@@ -124,7 +124,7 @@ The Tyla experiment with Gemini 3 Flash is our current baseline.
 
 ## Failed-experiment scripts
 
-For reproducibility, the test scripts are committed in `scripts/`:
-- `_test_multi_image2.py` — 5-frame sequence test
-- `_test_video_url.py` — YouTube URL hallucination test
-- `_test_json_format.py` — Ollama cloud format=json not enforced
+For reproducibility, the test scripts are committed in `experiments/` (see `experiments/README.md`):
+- `test_multi_image2.py` — 5-frame sequence test
+- `test_video_url.py` — YouTube URL hallucination test
+- `test_json_format.py` — Ollama cloud format=json not enforced

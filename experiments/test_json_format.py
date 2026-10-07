@@ -2,12 +2,19 @@
 import urllib.request, json, base64
 from PIL import Image
 
-key = open(r"C:\github_projects\multimodal_analysis\.env").read().split("OLLAMA_API_KEY=")[1].split("\n")[0].strip()
+import os, sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+from _env import load_env  # noqa: E402
+from common import PROCESSED  # noqa: E402  (set PROCESSED_DIR=data/<video_id>)
+load_env()
+key = os.environ.get("OLLAMA_API_KEY", "")
 
 # Make a test image
 img = Image.new("RGB", (224, 224), color=(70, 130, 180))
-img.save(r"C:\github_projects\multimodal_analysis\data\processed\_test_format.jpg")
-with open(r"C:\github_projects\multimodal_analysis\data\processed\_test_format.jpg", "rb") as f:
+PROCESSED.mkdir(parents=True, exist_ok=True)
+img.save(PROCESSED / "_test_format.jpg")
+with open(PROCESSED / "_test_format.jpg", "rb") as f:
     b64 = base64.b64encode(f.read()).decode()
 
 # Test 1: format: "json"

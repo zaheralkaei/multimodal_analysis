@@ -1,9 +1,9 @@
 """
 Phase 0 — Input prep.
 Takes a YouTube URL or local video file and extracts:
-  - frames at 2 fps (configurable via --fps; saved as JPEGs in data/processed/frames/)
-  - audio track as 16 kHz mono WAV (data/processed/audio.wav)
-  - metadata JSON (data/processed/metadata.json)
+  - frames at 2 fps (configurable via --fps; saved as JPEGs in <PROCESSED>/frames/)
+  - audio track as 16 kHz mono WAV (<PROCESSED>/audio.wav)
+  - metadata JSON (<PROCESSED>/metadata.json)
 
 Why 2 fps? See README.md "Phase 0 — Input preparation" for the full trade-off
 table. Short version: 1 fps missed fast camera motion in phase 3 (optical
@@ -11,17 +11,16 @@ flow), 5 fps is 4× the storage for marginal gain, 24 fps is overkill.
 2 fps gives 0.5s time resolution which catches pan/tilt/zoom in 1-2s shots.
 """
 from __future__ import annotations
-import argparse, json, os, subprocess, sys
+import argparse, json, subprocess, sys
 from fractions import Fraction
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = REPO_ROOT / "data"
-PROCESSED = DATA_DIR / "processed"
-if "PROCESSED_DIR" in os.environ:
-    PROCESSED = Path(os.environ["PROCESSED_DIR"])
-RAW = DATA_DIR / "raw"
-FRAMES_DIR = PROCESSED / "frames"
+from common import FRAMES_DIR, PROCESSED, RAW, display_path, record_run
+
+
+def ffmpeg_timeout(duration_sec: float, per_sec: float, minimum: int) -> int:
+    """Timeout that scales with video length (fixed timeouts failed on long videos)."""
+    return int(max(minimum, duration_sec * per_sec))
 
 
 def have_ffmpeg() -> bool:
@@ -47,7 +46,7 @@ def get_video(source: str, video_id: str = "video") -> Path:
             print(f"[info] downloading {source} via yt-dlp ...")
             subprocess.run([sys.executable, "-m", "yt_dlp", "-o", str(out),
                            "-f", "best[ext=mp4]/best", source],
-                          check=True, timeout=600)
+                          check=True, timeout=3600)
             return out
         except FileNotFoundError:
             print("[warn] yt-dlp not installed; install with `pip install yt-dlp`")
@@ -98,7 +97,7 @@ def extract_metadata(video: Path) -> dict:
     }
 
 
-def extract_audio(video: Path, out_wav: Path) -> None:
+def extract_audio(video: Path, out_wav: Path, timeout: int = 120) -> None:
     """Extract 16kHz mono PCM audio."""
     out_wav.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
@@ -106,11 +105,11 @@ def extract_audio(video: Path, out_wav: Path) -> None:
         "-vn", "-ac", "1", "-ar", "16000", "-acodec", "pcm_s16le",
         "-loglevel", "error", str(out_wav)
     ]
-    subprocess.run(cmd, check=True, timeout=120)
-    print(f"[ok] extracted audio to {out_wav.relative_to(REPO_ROOT)} ({out_wav.stat().st_size:,} bytes)")
+    subprocess.run(cmd, check=True, timeout=timeout)
+    print(f"[ok] extracted audio to {display_path(out_wav)} ({out_wav.stat().st_size:,} bytes)")
 
 
-def extract_frames(video: Path, out_dir: Path, fps: int = 1) -> int:
+def extract_frames(video: Path, out_dir: Path, fps: int = 1, timeout: int = 300) -> int:
     """Extract one frame every N seconds. Returns frame count.
 
     Clears any existing frame_*.jpg before extracting to avoid counter
@@ -122,7 +121,7 @@ def extract_frames(video: Path, out_dir: Path, fps: int = 1) -> int:
     if stale:
         for f in stale:
             f.unlink()
-        print(f"[info] cleared {len(stale)} stale frames from {out_dir.relative_to(REPO_ROOT)}/")
+        print(f"[info] cleared {len(stale)} stale frames from {display_path(out_dir)}/")
     cmd = [
         "ffmpeg", "-y", "-i", str(video),
         "-vf", f"fps={fps}",
@@ -130,9 +129,9 @@ def extract_frames(video: Path, out_dir: Path, fps: int = 1) -> int:
         "-loglevel", "error",
         str(out_dir / "frame_%05d.jpg")
     ]
-    subprocess.run(cmd, check=True, timeout=300)
+    subprocess.run(cmd, check=True, timeout=timeout)
     frames = sorted(out_dir.glob("frame_*.jpg"))
-    print(f"[ok] extracted {len(frames)} frames at {fps}fps to {out_dir.relative_to(REPO_ROOT)}/")
+    print(f"[ok] extracted {len(frames)} frames at {fps}fps to {display_path(out_dir)}/")
     return len(frames)
 
 
@@ -161,16 +160,19 @@ def main() -> int:
 
     # extract audio + frames in parallel (sequential here for simplicity)
     audio_wav = PROCESSED / "audio.wav"
-    extract_audio(video, audio_wav)
-    n_frames = extract_frames(video, FRAMES_DIR, args.fps)
+    duration = meta["duration_sec"]
+    extract_audio(video, audio_wav, ffmpeg_timeout(duration, 0.5, 120))
+    n_frames = extract_frames(video, FRAMES_DIR, args.fps, ffmpeg_timeout(duration, 2.0 * args.fps, 300))
     meta["frames_extracted"] = n_frames
     meta["frame_fps"] = args.fps
-    meta["audio_path"] = str(audio_wav.relative_to(REPO_ROOT))
-    meta["frames_dir"] = str(FRAMES_DIR.relative_to(REPO_ROOT)) + "/"
+    meta["audio_path"] = display_path(audio_wav)
+    meta["frames_dir"] = display_path(FRAMES_DIR) + "/"
 
     meta_path = PROCESSED / "metadata.json"
     meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
-    print(f"[ok] wrote {meta_path.relative_to(REPO_ROOT)}")
+    print(f"[ok] wrote {display_path(meta_path)}")
+    record_run(0, inputs=[video], outputs=[meta_path, audio_wav, FRAMES_DIR],
+               params={"fps": args.fps, "source": args.source})
 
     print("\n[next] Phase 1: python scripts/phase1_shots.py")
     return 0
