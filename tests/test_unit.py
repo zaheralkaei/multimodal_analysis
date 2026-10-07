@@ -47,6 +47,18 @@ def test_fingerprint_and_up_to_date(tmp_path, monkeypatch):
     assert "git_commit" in info["phase3"]
 
 
+def test_code_change_invalidates_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(common, "PROCESSED", tmp_path)
+    monkeypatch.setattr(common, "RUN_INFO", tmp_path / "run_info.json")
+    common.record_run(5, inputs=[], outputs=[], argv=[])
+    info = json.loads((tmp_path / "run_info.json").read_text())
+    assert "scripts/common.py" in info["phase5"]["code"]
+    assert common.is_up_to_date(5, [], tmp_path)[0]
+    info["phase5"]["code"]["scripts/common.py"] = "0" * 40  # as if common.py had been edited
+    (tmp_path / "run_info.json").write_text(json.dumps(info))
+    assert common.is_up_to_date(5, [], tmp_path) == (False, "code changed: scripts/common.py")
+
+
 # --- cross-modal statistics -------------------------------------------------
 
 def test_nearest_distance():
@@ -207,3 +219,30 @@ def test_derive_video_id_rejects_unsafe_ids():
     assert run_pipeline.derive_video_id("/x/My Clip (1).mp4", None) == "my_clip_1"
     with pytest.raises(SystemExit):
         run_pipeline.derive_video_id("x.mp4", "../escape")
+
+
+# --- validation metrics -------------------------------------------------------
+
+def test_cohen_kappa_and_wilson():
+    import validate_labels as vl
+    assert vl.cohen_kappa(["a", "b", "a", "b"], ["a", "b", "a", "b"]) == 1.0
+    assert vl.cohen_kappa(["a", "a", "b", "b"], ["a", "b", "a", "b"]) == pytest.approx(0.0)
+    lo, hi = vl.wilson(8, 10)
+    assert 0.44 < lo < 0.5 and 0.94 < hi < 0.97  # textbook values: 0.490, 0.943
+
+
+def test_compare_excludes_unsure_and_maps_families():
+    import validate_labels as vl
+    human = {0: "pan-left", 1: "unsure", 2: "static", 3: "zoom-in"}
+    pred = {0: "pan-right", 1: "static", 2: "static", 3: "zoom-in"}
+    exact = vl.compare("x", human, pred)
+    family = vl.compare("x", human, pred, vl.camera_family)
+    assert exact["n"] == 3 and exact["agree"] == 2
+    assert family["agree"] == 3
+
+
+def test_no_significance_claims_on_tiny_samples():
+    rng = np.random.default_rng(0)
+    x = rng.normal(size=8)
+    res = crossmodal.correlate("x", x, "y", x + 0.1 * rng.normal(size=8))
+    assert res["rho"] is not None and res["ci_low"] is None and not res["significant"]

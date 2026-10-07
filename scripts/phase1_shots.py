@@ -158,10 +158,10 @@ def main() -> int:
 
     durations = [s["duration_sec"] for s in shots]
     stats = {
+        **params,  # first, so the descriptive "detector" name below wins
         "detector": f"PySceneDetect-{'Adaptive' if args.detector == 'adaptive' else 'Content'}Detector"
                     + ("+ThresholdDetector(fades)" if args.fades else ""),
         "detector_version": _get_scenedetect_version(),
-        **params,
         "fps": round(fps, 3),
         "total_frames": int(total_frames),
         "n_shots": len(shots),

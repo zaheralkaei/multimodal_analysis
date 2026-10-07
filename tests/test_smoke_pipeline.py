@@ -84,3 +84,48 @@ def test_second_run_skips_everything(pipeline_run):
 def test_missing_file_fails_loudly():
     res = run_pipeline("/definitely/not/here.mp4")
     assert res.returncode != 0
+
+
+def test_labeling_and_validation_flow(pipeline_run):
+    """label_shots → (simulated human) → validate_labels → dashboard shows the result."""
+    _, _, data, reports = pipeline_run
+    env = {**os.environ, "PROCESSED_DIR": str(data), "REPORTS_DIR": str(reports)}
+    scripts = REPO / "scripts"
+    res = subprocess.run([sys.executable, str(scripts / "label_shots.py"), "--n", "5"], env=env,
+                         capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    page = (reports / "labeling.html").read_text()
+    assert page.count("class='card'") == 5 and "Download CSV" in page
+    # A "human" who agrees with the true motions (pipeline output for camera is exact on this video)
+    with (data / "human_labels.csv").open("w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["shot_idx", "emotion", "camera", "notes"])
+        for i, (_, motion) in enumerate(SMOKE_SHOTS):
+            w.writerow([i, "neutral", motion if i != 1 else "unsure", ""])
+    res = subprocess.run([sys.executable, str(scripts / "validate_labels.py")], env=env, capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    result = {r["comparison"]: r for r in json.loads((data / "validation.json").read_text())["results"]}
+    exact = result["camera: optical flow vs human (exact)"]
+    assert exact["n"] == len(SMOKE_SHOTS) - 1 and exact["accuracy"] == 1.0
+    subprocess.run([sys.executable, str(scripts / "phase8_dashboard.py")], env=env, check=True, capture_output=True)
+    assert "How accurate are these labels?" in (reports / "dashboard.html").read_text()
+    assert "100% (" in (reports / "dashboard.html").read_text()
+
+
+def test_compare_videos(pipeline_run, smoke_video, tmp_path):
+    _, _, data, _ = pipeline_run
+    other = REPO / "data" / f"{VIDEO_ID}_b"
+    try:
+        res = run_pipeline(str(smoke_video), "--id", f"{VIDEO_ID}_b", "--skip", "2,4,5", "--fps", "1")
+        assert res.returncode == 0, res.stdout[-2000:]
+        out = tmp_path / "comparison.html"
+        res = subprocess.run([sys.executable, str(REPO / "scripts" / "compare_videos.py"), VIDEO_ID, f"{VIDEO_ID}_b",
+                              "--out", str(out)], cwd=REPO, capture_output=True, text=True)
+        assert res.returncode == 0, res.stderr
+        assert "frame_fps" in res.stdout  # different fps is flagged as a comparability problem
+        rows = list(csv.DictReader(out.with_suffix(".csv").open()))
+        assert [r["n_shots"] for r in rows] == [str(len(SMOKE_SHOTS))] * 2
+        assert "Comparison of 2 videos" in out.read_text()
+    finally:
+        shutil.rmtree(other, ignore_errors=True)
+        shutil.rmtree(REPO / "reports" / f"{VIDEO_ID}_b", ignore_errors=True)

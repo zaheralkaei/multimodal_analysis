@@ -2,16 +2,27 @@
 
 End-to-end multimodal analysis of music videos. The pipeline extracts
 **7 synchronized streams** from a video (frames, audio, visual captions,
-camera motion, lyrics, audio mood, music structure) and produces an
-inspectable set of CSVs/JSONs plus an interactive HTML dashboard.
+camera motion, lyrics, audio mood, music structure), joins them per shot,
+tests cross-modal questions statistically ("are cuts on the beat?", "are shots
+shorter when the music is louder?") and produces inspectable CSVs/JSONs plus a
+self-contained interactive HTML dashboard.
 
 Designed to be:
-- **Reproducible** — every number in the dashboard is computed dynamically
-  from raw outputs; nothing is hardcoded.
-- **Auditable** — every phase writes inspectable artifacts before the next
+- **Reproducible**: every number in the dashboard is computed from raw
+  outputs, and every phase records its parameters, code version and input
+  fingerprints (`run_info.json`).
+- **Auditable**: every phase writes inspectable artifacts before the next
   one runs. You can open the CSVs to see what each model said.
-- **Composable** — swap any phase (e.g., TransNetV2 → PySceneDetect) without
-  breaking the rest of the pipeline.
+- **Tested**: a test suite runs the pipeline on synthetic videos whose
+  ground truth is known exactly (shot boundaries, camera motion, tempo, beat
+  alignment), with no API key or model download needed.
+- **Validatable**: a labelling page and agreement report measure how well the
+  model labels match human judgement.
+
+> **Note on the committed dashboards** (`reports/rtwpk9rb1Dc`, `reports/Z2ki180nHCI`):
+> they were generated before the fixes in [docs/AUDIT_2026-10.md](docs/AUDIT_2026-10.md)
+> (frames taken from the wrong part of each video, inverted camera directions).
+> Re-run the pipeline on both videos before using their numbers.
 
 ---
 
@@ -22,7 +33,7 @@ Designed to be:
 git clone https://github.com/zaheralkaei/multimodal_analysis.git
 cd multimodal_analysis
 python -m pip install -r requirements.txt
-choco install ffmpeg   # Windows; or use your package manager
+choco install ffmpeg   # Windows; or brew/apt (see below)
 
 # 2. Configure (cloud vision model)
 cp .env.example .env
@@ -35,8 +46,9 @@ python scripts/run_pipeline.py "https://www.youtube.com/watch?v=rtwpk9rb1Dc"
 # reports/<video_id>/dashboard.html
 ```
 
-The first run takes ~15-25 minutes (mostly the Gemini API calls + CLAP model
-download). Subsequent runs on the same video resume in seconds.
+The first run takes ~15-25 minutes (mostly the vision-model calls and the CLAP
+model download). Running the same command again only re-runs phases whose
+inputs, arguments or code changed.
 
 ---
 
@@ -46,63 +58,48 @@ download). Subsequent runs on the same video resume in seconds.
 
 | Dependency | Version | Why |
 |---|---|---|
-| Python | 3.11+ | tested on 3.11, 3.13 |
-| ffmpeg | 4.4+ | video frame extraction, audio decode |
-| yt-dlp | 2024+ | YouTube download |
-| ~5 GB free disk | | CLAP model (~2 GB) + per-video data |
+| Python | 3.10+ | CI runs 3.12 and 3.13 |
+| ffmpeg | 4.4+ | frame extraction, audio decode |
+| ~5 GB free disk | | CLAP model (~2 GB) + Whisper + per-video data |
 
 ### Python packages
 
 ```bash
-python -m pip install -r requirements.txt
+python -m pip install -r requirements.txt        # runtime
+python -m pip install demucs                     # optional: --separate-vocals
+python -m pip install -r requirements-ci.txt     # development: pinned test/lint set
 ```
 
-This installs:
-- `yt-dlp` — YouTube downloading
-- `scenedetect[opencv]` — shot detection (BSD-3-Clause)
-- `opencv-python-headless` — optical flow for camera motion
-- `faster-whisper` — speech-to-text (multilingual)
-- `transformers` + `torch` — CLAP for audio tagging
-- `librosa`, `soundfile` — music analysis
-- `plotly`, `Pillow` — dashboard rendering
-- `python-dotenv` — .env loading (we use a zero-dep alternative instead)
+`requirements.txt` gives version ranges capped at the next major release;
+`requirements-ci.txt` pins the exact versions the test suite is verified with.
 
 ### ffmpeg (separate install)
 
 ```bash
-# Windows
-choco install ffmpeg
-# or download from https://www.gyan.dev/ffmpeg/builds/
-
-# macOS
-brew install ffmpeg
-
-# Linux
+choco install ffmpeg      # Windows (or https://www.gyan.dev/ffmpeg/builds/)
+brew install ffmpeg       # macOS
 sudo apt install ffmpeg   # Debian/Ubuntu
-sudo dnf install ffmpeg   # Fedora
 ```
 
 Verify with `ffmpeg -version`.
 
 ### Configuration (.env)
 
-The vision model is **Gemini 3 Flash** running on **Ollama Cloud** (not local).
-This is faster and free for our usage volume.
+The default vision model is **Gemini 3 Flash** on **Ollama Cloud**.
 
 1. Get an API key at https://ollama.com/settings/keys
-2. Copy the template: `cp .env.example .env`
-3. Edit `.env`:
+2. `cp .env.example .env` and edit:
    ```
    OLLAMA_API_KEY=ollama_xxxxxxxxxxxxxxxxxxxxxxxxxxxx
    OLLAMA_BASE_URL=https://ollama.com/api
    VISION_MODEL=gemini-3-flash-preview
    ```
-4. `.env` is gitignored — never commit your key
+3. `.env` is gitignored, so never commit your key
 
 For local vision (no API key, slower on CPU):
 ```
 OLLAMA_BASE_URL=http://localhost:11434
-VISION_MODEL=gemma3:4b   # smaller, English-friendly
+VISION_MODEL=gemma3:4b
 ```
 
 ---
@@ -112,52 +109,56 @@ VISION_MODEL=gemma3:4b   # smaller, English-friendly
 ### Basic usage
 
 ```bash
-# YouTube video — ID is auto-derived from the URL
+# YouTube video: ID is auto-derived from the URL
 python scripts/run_pipeline.py "https://www.youtube.com/watch?v=rtwpk9rb1Dc"
 
-# Local file — ID is auto-derived from the filename
+# Local file: ID is auto-derived from the filename
 python scripts/run_pipeline.py ~/videos/my_clip.mp4
 
-# Explicit ID (overrides auto-derive)
+# Explicit ID (letters, digits, - and _ only)
 python scripts/run_pipeline.py "https://www.youtube.com/watch?v=Z2ki180nHCI" --id 4blocks
 ```
 
-The script:
-1. Derives a `video_id` from the URL or filename
-2. Downloads the video (if URL) to `data/raw/<video_id>.mp4`
-3. Runs all 8 phases, writing per-video output to `data/<video_id>/`
-4. Builds the dashboard at `reports/<video_id>/dashboard.html`
+The script derives a `video_id`, downloads the video (if a URL) to
+`data/raw/<video_id>.mp4`, runs the phases into `data/<video_id>/`, and writes
+`reports/<video_id>/dashboard.html`.
 
 ### Phases
 
 | # | Phase | What | Output |
 |---|---|---|---|
-| 0 | Input prep | Download video, extract frames + audio | `frames/`, `audio.wav`, `metadata.json` |
-| 1 | Shot detection | PySceneDetect ContentDetector | `shots.json`, `shot_predictions.csv` |
-| 2 | Vision | Gemini 3 Flash via Ollama Cloud (JSON-mode prompt) | `shot_vision.csv` |
-| 3 | Camera motion | OpenCV Farneback optical flow | `shot_camera.csv` |
-| 4 | Transcription | faster-whisper (multilingual) | `transcript.json`, `transcript.csv` |
-| 5 | Audio tagging | CLAP (laion/clap-htsat-fused) | `audio_clap.csv` |
-| 6 | Music structure | librosa tempo + key detection | `music_features.csv`, `music_summary.json` |
-| 7 | Sync | Join everything per shot | `sync_per_shot.csv`, `sync_stats.json` |
-| 8 | Dashboard | Plotly HTML | `reports/<video_id>/dashboard.html` |
+| 0 | Input prep | Download video, extract frames (2 fps) + 16 kHz audio | `frames/`, `audio.wav`, `metadata.json` |
+| 1 | Shot detection | PySceneDetect AdaptiveDetector + fade detection | `shots.json` (with 3 key frames per shot) |
+| 2 | Vision | Vision model on 3 frames per shot, fixed vocabularies via JSON schema | `shot_vision.csv`, `shot_vision_meta.json` |
+| 3 | Camera motion | Feature tracking + RANSAC similarity fit | `shot_camera.csv` |
+| 4 | Transcription | faster-whisper (multilingual), word timestamps, optional Demucs | `transcript.csv/json`, `transcript_words.csv` |
+| 5 | Audio tagging | CLAP, per-group probabilities (mood / section / instrument) | `audio_clap.csv` |
+| 6 | Music structure | librosa tempo, beats, key, per-second energy and onsets | `music_features.csv`, `music_summary.json` |
+| 7 | Sync + statistics | Join per shot; cut-on-beat test; correlations | `sync_per_shot.csv`, `sync_stats.json` |
+| 8 | Dashboard | Self-contained Plotly HTML | `reports/<video_id>/dashboard.html` |
 
-### Skip slow phases
-
-```bash
-# No vision captions (no API calls — fast, but no Emotion/Camera/Caption columns)
-python scripts/run_pipeline.py URL --skip-phase2
-
-# No audio tagging (skip 2GB CLAP download)
-python scripts/run_pipeline.py URL --skip-phase5
-```
-
-### Resume from a specific phase
+### Useful options
 
 ```bash
-# Re-run only phase 7 and 8 (after tweaking phase 6)
-python scripts/run_pipeline.py URL --start-from 7
+# Skip phases: 2 = vision (no API calls), 4 = Whisper, 5 = CLAP (no 2 GB download)
+python scripts/run_pipeline.py URL --skip 2,5
+
+# Better lyrics on dense mixes: isolate the vocals first (pip install demucs)
+python scripts/run_pipeline.py URL --separate-vocals
+
+# Force a language for Whisper
+python scripts/run_pipeline.py URL --whisper-language de
+
+# Re-run everything from phase 4, even if up to date
+python scripts/run_pipeline.py URL --start-from 4 --force
+
+# Classic fixed-threshold shot detector
+python scripts/run_pipeline.py URL --detector content
 ```
+
+Phases are skipped automatically when their arguments, inputs and code are
+unchanged. When one phase re-runs, its outputs change, so everything
+downstream re-runs too.
 
 ### Run individual phases manually
 
@@ -165,20 +166,70 @@ python scripts/run_pipeline.py URL --start-from 7
 export PROCESSED_DIR="data/rtwpk9rb1Dc"
 export REPORTS_DIR="reports/rtwpk9rb1Dc"
 
-python scripts/phase1_shots.py --threshold 35 --min-scene-len 30
-python scripts/phase2_vision.py --model gemini-3-flash-preview
-python scripts/phase8_dashboard.py
+python scripts/phase3_camera.py --pan-thresh 0.03   # every threshold is a flag
+python scripts/phase7_sync.py
+python scripts/phase8_dashboard.py --offline        # embed plotly.js (works without internet)
 ```
 
-### Multi-language support
+---
 
-The default Whisper model is `small` (multilingual, auto-detects language).
-For specific languages:
+## Checking the labels against humans
+
+The vision model's emotion labels and both camera-motion signals are model
+judgements. To measure how far to trust them:
+
 ```bash
-python scripts/run_pipeline.py URL --whisper-language de   # German
-python scripts/run_pipeline.py URL --whisper-language en   # English
-python scripts/run_pipeline.py URL --whisper-language ar   # Arabic
+export PROCESSED_DIR=data/<video_id> REPORTS_DIR=reports/<video_id>
+python scripts/label_shots.py --n 50          # writes reports/<video_id>/labeling.html
+# open it, label the shots, click "Download CSV", save as data/<video_id>/human_labels.csv
+python scripts/validate_labels.py             # accuracy (95% CI) + Cohen's kappa
+python scripts/phase8_dashboard.py            # the dashboard now shows the agreement table
 ```
+
+The labelling page does not show the model's answers, so they can't bias the
+labeller.
+
+## Comparing videos
+
+```bash
+python scripts/compare_videos.py              # every processed video under data/
+python scripts/compare_videos.py rtwpk9rb1Dc Z2ki180nHCI
+```
+
+Writes `reports/comparison.html` and `reports/comparison.csv` (cuts per minute,
+shot length distributions, on-beat rate vs chance, camera/emotion mix). It
+warns when videos were processed with different settings or code versions.
+
+## How the statistics work
+
+- **Cut on beat**: a cut is on beat if it lands within ±100 ms (also reported
+  at ±50 and ±200 ms) of a detected beat. The chance level is the share of the
+  timeline within that distance of a beat. At 120 BPM and ±100 ms that is
+  already ~40%, so a raw percentage means little on its own. The p-value comes
+  from a permutation test that moves each cut by a random fraction of its local
+  beat period.
+- **Correlations**: Spearman's rho across shots with a moving-block bootstrap
+  95% CI (neighbouring shots share a song section, so they are resampled
+  together). No significance is claimed with fewer than 20 shots.
+
+Both live in `scripts/crossmodal.py`.
+
+---
+
+## Development
+
+```bash
+pip install -r requirements-ci.txt
+ruff check scripts tests
+pytest                      # ~20 s; needs ffmpeg, no network
+```
+
+The tests build synthetic videos with known content: shots in distinct colours
+cut exactly on a 120 BPM click track, each with a known camera move. They check
+that every stage recovers that ground truth: shot boundaries, thumbnails from
+the right shot, camera labels and speeds, tempo, beat alignment, key, the
+dashboard and the skip logic. Phase 2 runs against a fake Ollama server. CI
+(`.github/workflows/ci.yml`) runs lint and tests on every push.
 
 ---
 
@@ -186,48 +237,34 @@ python scripts/run_pipeline.py URL --whisper-language ar   # Arabic
 
 ```
 multimodal_analysis/
-├── data/
-│   ├── raw/
-│   │   └── <video_id>.mp4            ← downloaded video
+├── data/                              ← all generated, gitignored
+│   ├── raw/<video_id>.mp4             ← downloaded video
 │   └── <video_id>/
-│       ├── audio.wav                 ← 16 kHz mono
-│       ├── frames/frame_*.jpg        ← JPEGs at --fps
-│       ├── metadata.json
-│       ├── shots.json                ← shot boundaries + mid-frames
-│       ├── shot_vision.csv           ← VLM per-shot data
-│       ├── shot_camera.csv           ← OpenCV per-shot motion
-│       ├── transcript.json           ← Whisper segments
-│       ├── audio_clap.csv            ← CLAP scores per 5s window
-│       ├── music_features.csv       ← per-second features (tempo, beats, RMS)
-│       ├── music_summary.json        ← tempo, key, beat count
-│       ├── sync_per_shot.csv         ← joined table (one row per shot)
-│       └── sync_stats.json
+│       ├── frames/frame_*.jpg         ← JPEGs at --fps
+│       ├── audio.wav, metadata.json
+│       ├── shots.json                 ← boundaries, mid-frame, 3 key frames
+│       ├── shot_vision.csv            ← vision model per shot
+│       ├── shot_camera.csv            ← camera motion per shot
+│       ├── transcript.*, transcript_words.csv
+│       ├── audio_clap.csv             ← CLAP probabilities per 5 s window
+│       ├── music_features.csv, music_summary.json
+│       ├── sync_per_shot.csv, sync_stats.json
+│       ├── human_labels.csv, validation.json   ← optional, from the labelling workflow
+│       └── run_info.json              ← provenance for every phase
 ├── reports/
-│   └── <video_id>/
-│       ├── dashboard.html            ← open in any browser
-│       └── frames/                   ← thumbnails embedded in dashboard
+│   ├── <video_id>/dashboard.html      ← self-contained, open in any browser
+│   └── comparison.html                ← from compare_videos.py
 ├── scripts/
-│   ├── phase0_input.py               ← download + extract
-│   ├── phase1_shots.py               ← shot detection
-│   ├── phase2_vision.py              ← VLM per-shot Q&A
-│   ├── phase3_camera.py              ← optical flow
-│   ├── phase4_transcribe.py          ← Whisper
-│   ├── phase5_audio.py               ← CLAP
-│   ├── phase6_music.py               ← librosa
-│   ├── phase7_sync.py                ← join all streams
-│   ├── phase8_dashboard.py           ← Plotly HTML
-│   ├── run_pipeline.py               ← wrapper that runs all 8
-│   ├── _env.py                       ← .env loader
-│   ├── _normalize_emotion.py         ← emotion synonym map
-│   └── _renormalize_existing.py
+│   ├── run_pipeline.py                ← runs phases 0-8
+│   ├── phase0_input.py … phase8_dashboard.py
+│   ├── common.py                      ← paths, vocabularies, frame timing, provenance
+│   ├── crossmodal.py                  ← statistics (beat test, correlations)
+│   ├── label_shots.py, validate_labels.py, compare_videos.py
+│   ├── _env.py, _normalize_emotion.py, _renormalize_existing.py
+├── tests/                             ← pytest suite on synthetic media
+├── experiments/                       ← one-off scripts behind docs/CAMERA_DETECTION.md
 ├── docs/
-│   ├── STRUCTURE_V3.md               ← folder naming history
-│   ├── CAMERA_DETECTION.md           ← why we use OpenCV, not the VLM
-│   ├── COMPARISON_1FPS_VS_2FPS.md
-│   └── PLAN_ROUND_2.md
-├── .env                              ← gitignored
-├── .env.example
-├── requirements.txt
+├── requirements.txt, requirements-ci.txt, pyproject.toml
 └── README.md
 ```
 
@@ -235,118 +272,77 @@ multimodal_analysis/
 
 ## Models and what they do
 
-| Phase | Model | What it analyzes | Capabilities | Limits |
-|---|---|---|---|---|
-| 1 (shots) | PySceneDetect ContentDetector | Visual scene changes | BSD-3-Clause, ~5K⭐, 5 detector algorithms | Reads video directly, no frame-rate dep |
-| 2 (vision) | **Gemini 3 Flash** via Ollama Cloud | Per-shot caption, camera, emotion, colors, entities, location, lighting, composition | 1-2s per call, JSON-mode, free tier ~10K calls/day | Single mid-frame per shot (can't see motion) |
-| 3 (camera) | OpenCV Farneback optical flow | Camera motion (pan/tilt/zoom/static) | Local, free, no API | 8 discrete classes (no magnitude) |
-| 4 (transcription) | **faster-whisper small** (multilingual) | Spoken/sung words | 99 languages, ~5MB model | Hallucinates on silence/music |
-| 5 (audio) | **CLAP** (laion/clap-htsat-fused) | 27 audio tags (mood, section, instrument) | 48kHz, 27 predefined tags | Vocabulary locked at design time |
-| 6 (music) | librosa | Tempo, beats, key, RMS energy | Pure signal processing | Beat detection fails on rubato music |
-| 7 (sync) | rule-based | Cross-modal joins + stats | Deterministic | ±100ms beat tolerance is arbitrary |
-| 8 (dashboard) | Plotly | HTML visualization | Interactive, single-file | Self-contained but not mobile-optimized |
+| Phase | Model / method | What it analyzes | Limits |
+|---|---|---|---|
+| 1 (shots) | PySceneDetect AdaptiveDetector + ThresholdDetector | Hard cuts, fades to black | Cross-dissolves not detected |
+| 2 (vision) | **Gemini 3 Flash** via Ollama Cloud (configurable) | Caption, camera, emotion, colours, entities, location, lighting, composition | 3 frames per shot; labels are judgements, so validate them |
+| 3 (camera) | OpenCV feature tracking + RANSAC | Pan/tilt (with direction), zoom in/out, static, handheld, with speeds | Large moving subjects filling the frame can look like camera motion |
+| 4 (transcription) | **faster-whisper small** (+ optional Demucs) | Sung/spoken words with word timestamps | Hallucinates on silence/music; Demucs helps |
+| 5 (audio) | **CLAP** (laion/clap-htsat-fused) | 12 mood, 7 section, 8 instrument tags | Fixed vocabulary; probabilities are relative within each group |
+| 6 (music) | librosa | Tempo, beats, key, RMS, onsets, brightness | Beat tracking fails on rubato; relative major/minor confusable |
+| 7 (sync) | `crossmodal.py` | Joins + permutation test + bootstrap CIs | Needs ≥20 shots for correlations |
+| 8 (dashboard) | Plotly | Self-contained HTML with filters | Plotly loads from CDN unless `--offline` |
 
-### What each vision model is good at
+### Vision model choices
 
-**Gemini 3 Flash** is the default because:
-- 1-2s per call (vs 30s+ for gemma3:4b locally)
-- Free tier at ollama.com
-- Good at structured JSON output
-- ~10K calls/day limit on free tier
+**Gemini 3 Flash** (default): 1-2 s per call, free tier at ollama.com. For
+**local-only** use: `gemma3:4b` (~3 GB RAM), `gemma3:27b` (~16 GB),
+`gemma4:31b` (24 GB+). Requests run 4 at a time (`--workers`).
 
-For **local-only** use:
-- `gemma3:4b` — small, English-friendly, ~3GB RAM
-- `gemma3:27b` — much better, needs ~16GB RAM
-- `gemma4:31b` — best open, needs 24GB+ RAM
-
-For **other clouds**:
-- `gpt-4o-mini` — pay-per-call, fastest in benchmarks
-- `claude-3.5-sonnet` — most accurate on nuanced prompts
-- `qwen2.5-vl-72b` — best open multimodal (Ollama cloud, not local)
-
-**Whisper model sizes** (faster-whisper):
-- `tiny` — 39M params, ~1GB RAM, fast
-- `base` — 74M params, ~1GB RAM
-- `small` — 244M params, ~2GB RAM, **default**
-- `medium` — 769M params, ~5GB RAM, slower
-- `large-v3` — 1550M params, ~10GB RAM, best accuracy
-
-Multilingual versions: drop the `.en` suffix (e.g. `small` instead of `small.en`).
+**Whisper model sizes** (faster-whisper): `tiny`, `base`, `small` (**default**),
+`medium`, `large-v3`. The `.en` variants are English-only.
 
 ### What CLAP can and can't do
 
-CLAP is a contrastive audio-text model. It scores how well each audio window
-matches each text label. **Good for**: matching a known tag vocabulary.
-**Bad for**: open-ended sound description (no way to get new vocabulary).
-
-Our 27 tags cover:
-- 12 mood tags (happy, sad, aggressive, romantic, …)
-- 7 section tags (intro, verse, chorus, bridge, outro, instrumental break, vocal only)
-- 8 instrument tags (acoustic guitar, electric guitar, piano, drums, bass, synth, strings, vocal only no instruments)
-
-In practice on a single 3-4 minute pop song, only 6-9 tags have meaningful
-variance — the rest are zero. See `phase5_audio.py` for the active/inactive
-tag report.
+CLAP scores how well each 5-second audio window matches each text label. It is
+good at ranking a known vocabulary but cannot describe sounds outside it. Each
+tag group (mood, section, instrument) gets its own softmax, so a strong
+instrument match cannot suppress the mood scores. Phase 5 prints how much each
+tag varies over the song; flat tags carry no timing information.
 
 ---
 
 ## Troubleshooting
 
 ### "ffmpeg not found"
-Install ffmpeg (see Install section). Verify with `ffmpeg -version`.
-
-### "No module named 'scenedetect'"
-```bash
-pip install scenedetect[opencv]
-```
+Install ffmpeg (see Install). Verify with `ffmpeg -version`.
 
 ### "Health check failed: model didn't respond"
 - **Cloud**: check `OLLAMA_API_KEY` in `.env`, verify at https://ollama.com/settings/keys
-- **Local**: is ollama running? `ollama serve` in another terminal, then `ollama pull gemma3:4b`
+- **Local**: is ollama running? `ollama serve`, then `ollama pull gemma3:4b`
+- If your endpoint rejects JSON schemas, phase 2 falls back to plain JSON mode
+  automatically; `--no-schema` skips the attempt.
 
-### "shot_vision.csv has truncated captions"
-Increase `num_predict` in `phase2_vision.py` (currently 1500). Or check the
-parse_json_response output for "parse_error" rows.
+### "shot_vision.csv has [error] or [parse_error] rows"
+Re-run phase 2: it keeps successful rows and retries only the failed ones.
 
-### "Dashboard shows the wrong thumbnails"
-This was a known bug: stale `reports/<video_id>/frames/` from a previous run.
-Fix is in `phase8_dashboard.py`: it now checks file size before skipping the
-copy, so different-size files (different videos) get re-copied.
+### "Lyrics are missing or wrong"
+Try `--separate-vocals` (needs `pip install demucs`) and/or a larger model
+(`--whisper-model medium`). Force the language with `--whisper-language`.
 
-If the issue persists, force a clean rebuild:
-```bash
-rm -rf reports/<video_id>/
-python scripts/phase8_dashboard.py
-```
+### "Camera motion is 'static' for a slow pan"
+Motion below 4% of the frame per second counts as static by design. Lower it
+with `python scripts/phase3_camera.py --pan-thresh 0.02` (also `--tilt-thresh`,
+`--zoom-thresh`, `--jitter-thresh`).
 
-### "Lyrics look like English instead of German/Arabic/etc."
-Default Whisper is `small.en` (English-only) in older runs. Use the
-multilingual version:
-```bash
-python scripts/run_pipeline.py URL --whisper-model small --whisper-language de
-```
-
-### "Camera motion is 'static' for everything"
-The VLM sees only the mid-frame, which can't show motion. Use OpenCV
-optical flow (already done in phase 3) for camera motion — see
-`docs/CAMERA_DETECTION.md`.
+### "A phase didn't re-run after I changed something"
+Phases re-run when their arguments, input files or code change. Anything else
+(e.g. a changed `.env`) needs `--force`.
 
 ---
 
 ## Design notes
 
-- [docs/CAMERA_DETECTION.md](docs/CAMERA_DETECTION.md) — why we use
-  OpenCV for camera, not the VLM (with failed experiments)
-- [docs/COMPARISON_1FPS_VS_2FPS.md](docs/COMPARISON_1FPS_VS_2FPS.md) —
-  frame-rate sensitivity analysis
-- [docs/PLAN_ROUND_2.md](docs/PLAN_ROUND_2.md) — round-2 audit plan
-- [docs/STRUCTURE_V3.md](docs/STRUCTURE_V3.md) — folder naming history
-
-- [docs/AUDIT.md](docs/AUDIT.md) — round-3 audit report
-  (code quality, data correctness, methodology, engineering hygiene)
-
-- [docs/METHODOLOGY_REVIEW.md](docs/METHODOLOGY_REVIEW.md) — alternatives
-  to current shot detection, camera motion, transcription (free + paid)
+- [docs/AUDIT_2026-10.md](docs/AUDIT_2026-10.md): latest audit (critical
+  frame-alignment fix, implemented improvements)
+- [docs/CAMERA_DETECTION.md](docs/CAMERA_DETECTION.md): why camera motion comes
+  from the frames rather than the vision model (with failed experiments in `experiments/`)
+- [docs/METHODOLOGY_REVIEW.md](docs/METHODOLOGY_REVIEW.md): alternatives for
+  shot detection, camera motion and transcription
+- [docs/COMPARISON_1FPS_VS_2FPS.md](docs/COMPARISON_1FPS_VS_2FPS.md): frame-rate
+  sensitivity (computed before the frame-alignment fix; needs re-running)
+- [docs/AUDIT.md](docs/AUDIT.md), [docs/AUDIT_R2.md](docs/AUDIT_R2.md),
+  [docs/PLAN_ROUND_2.md](docs/PLAN_ROUND_2.md), [docs/STRUCTURE_V3.md](docs/STRUCTURE_V3.md): earlier rounds
 
 ## License
 

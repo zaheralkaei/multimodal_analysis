@@ -121,12 +121,18 @@ def spearman(x, y) -> float:
     return float(np.corrcoef(rx, ry)[0, 1])
 
 
+MIN_SHOTS_FOR_CI = 20  # below this, bootstrap intervals are too unstable to call anything significant
+
+
 def block_bootstrap_ci(x, y, stat=spearman, n_boot: int = 2000, block: int | None = None,
                        seed: int = 0, level: float = 0.95) -> tuple[float, float]:
-    """Moving-block bootstrap CI for stat(x, y) over a time-ordered sequence."""
+    """Moving-block bootstrap CI for stat(x, y) over a time-ordered sequence.
+
+    Returns (nan, nan) for fewer than MIN_SHOTS_FOR_CI points.
+    """
     x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
     n = x.size
-    if n < 6:
+    if n < MIN_SHOTS_FOR_CI:
         return float("nan"), float("nan")
     block = block or max(2, int(round(n ** (1 / 3))))
     starts_max = n - block + 1

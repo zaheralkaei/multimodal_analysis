@@ -90,7 +90,7 @@ def thumbnail_data_uri(rel_path: str, width: int = 360) -> str:
 def html_table(headers: list[str], rows: list[list], cls: str = "data") -> str:
     head = "".join(f"<th>{esc(h)}</th>" for h in headers)
     body = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in rows)
-    return f"<table class='{cls}'><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+    return f"<div class='scroll'><table class='{cls}'><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>"
 
 
 # ---------------------------------------------------------------------------
@@ -107,15 +107,16 @@ def timeline_figure(shots, clap, music, beats, transcript):
                         "Music energy (RMS per second) + detected beats",
                         "Lyrics / transcript"))
     emotions = [s.get("vision_emotion", "") for s in shots]
+    # Horizontal bars: base = start time, x = duration, so shots tile the time axis
     fig.add_trace(go.Bar(
-        x=[float(s["duration_sec"]) for s in shots], y=[1] * len(shots),
+        orientation="h", x=[float(s["duration_sec"]) for s in shots], y=["shots"] * len(shots),
         base=[float(s["start_sec"]) for s in shots],
         marker_color=[color_for_emotion(e) for e in emotions], marker_line_width=0,
         customdata=[[s["shot_idx"], e or "—", (s.get("vision_caption") or "")[:80]] for s, e in zip(shots, emotions)],
         hovertemplate="<b>Shot %{customdata[0]}</b><br>%{customdata[1]}<br><i>%{customdata[2]}</i><extra></extra>",
         showlegend=False, name="Shots"), row=1, col=1)
     for emotion in sorted(set(emotions)):
-        fig.add_trace(go.Bar(x=[None], y=[None], marker_color=color_for_emotion(emotion),
+        fig.add_trace(go.Bar(orientation="h", x=[None], y=[None], marker_color=color_for_emotion(emotion),
                              name=emotion or "(none)", hoverinfo="skip"), row=1, col=1)
 
     if len(clap) >= 2:
@@ -135,7 +136,8 @@ def timeline_figure(shots, clap, music, beats, transcript):
                                  hovertemplate="Beat at %{x:.2f}s<extra></extra>"), row=3, col=1)
     if transcript:
         fig.add_trace(go.Bar(
-            x=[float(t["end_sec"]) - float(t["start_sec"]) for t in transcript], y=[1] * len(transcript),
+            orientation="h", y=["lyrics"] * len(transcript),
+            x=[float(t["end_sec"]) - float(t["start_sec"]) for t in transcript],
             base=[float(t["start_sec"]) for t in transcript], marker_color="#17becf", marker_line_width=0,
             customdata=[[(t.get("text") or "")[:80]] for t in transcript], showlegend=False, name="Lyrics",
             hovertemplate="<b>Lyric</b> %{base:.1f}s<br>%{customdata[0]}<extra></extra>"), row=4, col=1)
@@ -194,7 +196,7 @@ def shot_table(shots: list[dict]) -> str:
     rows = []
     for s in shots:
         uri = thumbnail_data_uri(s.get("mid_frame", ""))
-        thumb = (f"<img src='{uri}' loading='lazy' class='thumb' alt='shot {esc(s['shot_idx'])}'/>" if uri else "—")
+        thumb = (f"<img src='{uri}' class='thumb' alt='shot {esc(s['shot_idx'])}'/>" if uri else "—")
         emo = s.get("vision_emotion", "") or ""
         bg = color_for_emotion(emo)
         fg = "white" if bg in DARK_BACKGROUNDS else "black"
@@ -221,7 +223,8 @@ def shot_table(shots: list[dict]) -> str:
     head = "".join(f"<th>{h}</th>" for h in
                    ["Thumb", "#", "Time", "Dur", "Emotion", "Camera", "Caption", "Audio mood", "Lyrics"])
     return (f"<div class='filters'>{filters} <span id='shotCount'></span></div>"
-            f"<table id='shotTable' class='data'><thead><tr>{head}</tr></thead><tbody>{''.join(rows)}</tbody></table>")
+            f"<div class='scroll'><table id='shotTable' class='data'><thead><tr>{head}</tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table></div>")
 
 
 FILTER_JS = """
@@ -255,7 +258,7 @@ FILTER_JS = """
 
 CSS = """
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 1400px; margin: 0 auto;
-       padding: 20px; color: #222; line-height: 1.5; background: #fff; }
+       padding: 20px 16px; color: #222; line-height: 1.5; background: #fff; }
 h1 { border-bottom: 2px solid #333; padding-bottom: 8px; }
 h2 { margin-top: 32px; color: #444; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
 .box { padding: 12px 16px; margin: 20px 0; border-radius: 4px; }
@@ -266,6 +269,7 @@ h2 { margin-top: 32px; color: #444; border-bottom: 1px solid #ddd; padding-botto
 .method { background: #f5f5f5; padding: 10px 14px; border-radius: 4px; font-size: 13px; margin: 8px 0 16px; }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 20px 0; }
 @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+.grid > * { min-width: 0; }
 .panel { background: #fafafa; border: 1px solid #e0e0e0; padding: 12px; border-radius: 4px; overflow-x: auto; }
 table.data { border-collapse: collapse; font-size: 12px; width: 100%; }
 table.data th, table.data td { border: 1px solid #ccc; padding: 4px 8px; text-align: left; vertical-align: top; }
@@ -276,6 +280,8 @@ table.data th { background: #eee; }
 #lightbox { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.8); align-items: center;
             justify-content: center; cursor: zoom-out; z-index: 10; }
 #lightbox img { max-width: 90vw; max-height: 90vh; image-rendering: auto; }
+.scroll { overflow-x: auto; max-width: 100%; }
+p, li { overflow-wrap: anywhere; }
 code { background: #eee; padding: 1px 4px; border-radius: 3px; font-size: 13px; }
 """
 
@@ -301,8 +307,9 @@ def main() -> int:
     beats = music_summary.get("beat_times", [])
     print(f"[info] loaded {len(shots)} shots")
 
+    has_vision = any(s.get("vision_caption") for s in shots)
     vision_model = (run_info.get("phase2", {}).get("params", {}).get("model")
-                    or stats.get("vision_model") or "not run")
+                    or stats.get("vision_model") or ("unknown" if has_vision else "not run"))
     whisper = run_info.get("phase4", {}).get("params", {})
     fps = metadata.get("frame_fps", "?")
     plotly_js = True if args.offline else "cdn"
@@ -363,14 +370,27 @@ def main() -> int:
         ["Shot detection", f"{len(shots)} shots — {shot_stats.get('detector', '?')}"],
         ["Vision", f"{n_captions}/{len(shots)} shots captioned — model {vision_model}"],
         ["Camera motion", f"{sum(1 for s in shots if s.get('camera_motion') not in ('', 'unknown', None))}/{len(shots)} shots classified"],
-        ["Transcription", f"{len(transcript)} segments — whisper {whisper.get('model', '?')}"
-                          + (" + Demucs vocals" if whisper.get("separate_vocals") else "")],
+        ["Transcription", (f"{len(transcript)} segments — whisper {whisper.get('model', '?')}"
+                           + (" + Demucs vocals" if whisper.get("separate_vocals") else ""))
+                          if "phase4" in run_info or transcript else "not run"],
         ["CLAP audio", f"{len(clap)} windows × {len(MOOD_TAGS)} mood tags (per-group softmax)" if clap else "not run"],
         ["Music", f"{music_summary.get('n_beats', 0)} beats, {music_summary.get('tempo_bpm', '?')} BPM"],
     ]
     prov = [[f"phase {k[5:]}", esc(v.get("git_commit", "?")), esc(v.get("finished_at", "?")),
              esc(", ".join(f"{pk}={pv}" for pk, pv in v.get("params", {}).items() if pk != "source"))]
             for k, v in sorted(run_info.items())]
+    validation = read_json(PROCESSED / "validation.json")
+    if validation.get("results"):
+        vrows = [[esc(r["comparison"]), r["n"],
+                  "—" if r["accuracy"] is None else f"{r['accuracy']:.0%} ({r['ci_low']:.0%}–{r['ci_high']:.0%})",
+                  "—" if r["kappa"] is None else r["kappa"]] for r in validation["results"]]
+        validation_html = (f"<p class='method'>Agreement with {validation['n_labelled_shots']} human-labelled shots "
+                           f"(<code>scripts/validate_labels.py</code>). κ: 0 = chance, 1 = perfect.</p>"
+                           + html_table(["Comparison", "Shots", "Accuracy (95% CI)", "Cohen's κ"], vrows))
+    else:
+        validation_html = ("<div class='box warn'>No human validation yet: the emotion and camera labels below are "
+                           "unverified model output. Create a labelling page with <code>scripts/label_shots.py</code> "
+                           "and score it with <code>scripts/validate_labels.py</code>.</div>")
     stale = sorted({v.get("git_commit", "").replace("-dirty", "") for v in run_info.values()} - {""})
     stale_warning = ("<div class='box warn'>Phases were run from different code versions "
                      f"({', '.join(map(esc, stale))}). Re-run the pipeline for consistent results.</div>"
@@ -395,7 +415,7 @@ Generated by <code>scripts/phase8_dashboard.py</code> from the files in <code>{e
 <h2>1. Synchronized timeline</h2>
 <p class="method"><b>Method:</b> four tracks share the time axis. Shots are coloured by the vision model's emotion label;
 audio mood shows the 4 CLAP mood tags that vary most; energy is librosa RMS per second with beat-tracker ticks; lyrics are faster-whisper segments.</p>
-{timeline}
+<div class="scroll">{timeline}</div>
 
 <h2>2. Does the editing follow the music?</h2>
 <p class="method"><b>Method:</b> a cut is "on beat" if it is within the tolerance of a detected beat. "Expected by chance" is the share of
@@ -407,6 +427,8 @@ bootstrap (consecutive shots are resampled together because neighbouring shots s
 {correlation_section(stats)}
 
 <h2>3. Per-modality breakdowns</h2>
+<h3>How accurate are these labels?</h3>
+{validation_html}
 <div class="grid"><div class="panel">{emotion_html}</div><div class="panel">{cam_html}</div></div>
 <div class="panel"><p>{agreement}</p></div>
 <div class="panel">{mood_html}</div>
@@ -419,7 +441,7 @@ bootstrap (consecutive shots are resampled together because neighbouring shots s
 <h3>Provenance</h3>{html_table(["Phase", "Git commit", "Finished", "Parameters"], prov) if prov else "<p><i>No run_info.json.</i></p>"}</div>
 
 <div class="box caveat"><h2>Methodology &amp; caveats</h2><ul>
-<li><b>Vision</b> ({esc(vision_model)}) sees up to three frames per shot (15/50/85%) and answers from fixed vocabularies. Labels are model judgements and have not been validated against human labels unless <code>docs/VALIDATION.md</code> says otherwise.</li>
+<li><b>Vision</b> ({esc(vision_model)}) sees up to three frames per shot (15/50/85%) and answers from fixed vocabularies. Labels are model judgements; see "How accurate are these labels?" for agreement with human labels.</li>
 <li><b>Shot detection</b> finds hard cuts and fades to black; cross-dissolves are not detected.</li>
 <li><b>Camera motion</b> fits a similarity transform to tracked features with RANSAC between frames {esc(fps)} per second apart. Motion slower than the thresholds (default 4% of the frame per second) counts as static; strong subject motion filling the frame can still be mistaken for camera motion.</li>
 <li><b>Transcription</b> uses faster-whisper, trained on speech rather than singing; expect gaps on heavily produced vocals.</li>
@@ -434,7 +456,7 @@ bootstrap (consecutive shots are resampled together because neighbouring shots s
     out = REPORTS / "dashboard.html"
     out.write_text(page, encoding="utf-8")
     print(f"[ok] wrote {display_path(out)} ({out.stat().st_size:,} bytes)")
-    record_run(8, inputs=[sync_csv, PROCESSED / "sync_stats.json"], outputs=[out],
+    record_run(8, inputs=[sync_csv, PROCESSED / "sync_stats.json", PROCESSED / "validation.json"], outputs=[out],
                params={"offline": args.offline})
     return 0
 

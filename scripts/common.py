@@ -13,7 +13,7 @@ file in ``PROCESSED/run_info.json``. ``run_pipeline.py`` uses that record to
 skip phases whose inputs and arguments have not changed.
 """
 from __future__ import annotations
-import json, math, os, platform, subprocess, sys, time
+import hashlib, json, math, os, platform, subprocess, sys, time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -128,6 +128,23 @@ def git_commit() -> str:
         return "unknown"
 
 
+def code_hashes() -> dict[str, str]:
+    """sha1 of every module from scripts/ that the running phase has imported.
+
+    Stored with each run, so editing a phase (or a helper it uses) re-runs that
+    phase and, through changed outputs, everything downstream — while editing
+    an unrelated script does not re-run expensive phases like the vision model.
+    """
+    scripts = Path(__file__).resolve().parent
+    files = {Path(sys.argv[0]).resolve()} if sys.argv and sys.argv[0].endswith(".py") else set()
+    for mod in list(sys.modules.values()):
+        f = getattr(mod, "__file__", None)
+        if f and Path(f).resolve().parent == scripts:
+            files.add(Path(f).resolve())
+    return {display_path(p): hashlib.sha1(p.read_bytes()).hexdigest()
+            for p in sorted(files) if p.exists() and p.parent == scripts}
+
+
 def load_run_info(processed: Path | None = None) -> dict:
     path = (processed or PROCESSED) / "run_info.json"
     if path.exists():
@@ -147,6 +164,7 @@ def record_run(phase: int, inputs: list[Path], outputs: list[Path],
         "params": params or {},
         "inputs": {display_path(p): fingerprint(p) for p in inputs},
         "outputs": {display_path(p): fingerprint(p) for p in outputs},
+        "code": code_hashes(),
         "git_commit": git_commit(),
         "python": platform.python_version(),
         "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -162,6 +180,12 @@ def is_up_to_date(phase: int, argv: list[str], processed: Path | None = None) ->
         return False, "never ran"
     if rec.get("argv") != list(argv):
         return False, "arguments changed"
+    if "code" not in rec:
+        return False, "no code version recorded"
+    for p, digest in rec["code"].items():
+        path = REPO_ROOT / p
+        if not path.exists() or hashlib.sha1(path.read_bytes()).hexdigest() != digest:
+            return False, f"code changed: {p}"
     for kind in ("inputs", "outputs"):
         for p, fp in rec.get(kind, {}).items():
             path = Path(p) if Path(p).is_absolute() else REPO_ROOT / p

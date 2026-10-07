@@ -23,4 +23,5 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/phase8_dashboard.py" = ["E501"]  # long HTML prose
+"scripts/label_shots.py" = ["E501"]  # embedded HTML/JS page
 "scripts/_normalize_emotion.py" = ["E501"]  # one synonym list per line
