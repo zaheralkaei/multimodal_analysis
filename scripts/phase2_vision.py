@@ -172,26 +172,31 @@ def analyze_shots(model: str, shots: list[dict], frames_dir: Path,
     rows = []
     stats = {"calls": 0, "errors": 0, "parse_errors": 0, "total_seconds": 0.0}
 
-    # Resume support: load any existing rows from out_csv.
+    cols = ["shot_idx", "start_sec", "end_sec", "duration_sec", "mid_frame"] + [q[0] for q in QUESTIONS]
+
+    # Resume support: keep existing rows that succeeded AND still match the
+    # current shot list (shots.json changes when phase 1 is re-run with other
+    # settings). Failed or stale rows are dropped and re-analyzed.
     existing = {}
     if out_csv.exists():
         with out_csv.open(encoding="utf-8") as f:
             for r in csv.DictReader(f):
                 try:
-                    existing[int(r["shot_idx"])] = r
-                except (ValueError, KeyError):
+                    idx = int(r["shot_idx"])
+                    shot = shots[idx]
+                    if ((r.get("caption") or "").startswith(("[error", "[parse_error"))
+                            or abs(float(r["start_sec"]) - float(shot["start_sec"])) > 1e-3
+                            or r.get("mid_frame") != shot["mid_frame_path"]):
+                        continue
+                    existing[idx] = r
+                except (ValueError, KeyError, IndexError):
                     pass
-        if existing:
-            print(f"[info] resuming from existing CSV: {len(existing)} shots already done")
-            cols = ["shot_idx", "start_sec", "end_sec", "duration_sec", "mid_frame"] + [q[0] for q in QUESTIONS]
-            tmp_rows = sorted(existing.values(), key=lambda r: int(r["shot_idx"]))
-            with out_csv.open("w", encoding="utf-8", newline="") as f:
-                w = csv.DictWriter(f, fieldnames=cols)
-                w.writeheader()
-                for r in tmp_rows:
-                    w.writerow(r)
-
-    cols = ["shot_idx", "start_sec", "end_sec", "duration_sec", "mid_frame"] + [q[0] for q in QUESTIONS]
+        print(f"[info] resuming from existing CSV: {len(existing)} shots reusable")
+        with out_csv.open("w", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=cols)
+            w.writeheader()
+            for idx in sorted(existing):
+                w.writerow(existing[idx])
 
     file_exists = out_csv.exists()
     f_out = out_csv.open("a", encoding="utf-8", newline="")

@@ -117,17 +117,18 @@ def classify_motion(flow) -> dict:
     }
 
 
-def analyze_shots(shots: list[dict], frames_dir: Path) -> list[dict]:
+def analyze_shots(shots: list[dict], frames_dir: Path, frame_fps: float = 1.0) -> list[dict]:
     """For each shot, compute optical flow between consecutive frames."""
+    import math
     import cv2
     import numpy as np
 
     rows = []
     for i, shot in enumerate(shots):
-        # Find frame files for this shot
-        # Shot's start_sec and end_sec correspond to frame indices at 1 fps
-        start_frame = int(shot["start_sec"]) + 1  # 1-indexed filenames
-        end_frame = int(shot["end_sec"]) + 1
+        # Find frame files for this shot: extracted frame k (0-indexed) sits at
+        # t = k / frame_fps and is named frame_{k+1}. Keep frames in [start, end).
+        start_frame = math.ceil(float(shot["start_sec"]) * frame_fps) + 1  # 1-indexed filenames
+        end_frame = math.ceil(float(shot["end_sec"]) * frame_fps)  # inclusive
         frame_paths = []
         for fi in range(start_frame, end_frame + 1):
             p = frames_dir / f"frame_{fi:05d}.jpg"
@@ -195,7 +196,12 @@ def main() -> int:
     shots = json.loads(shots_path.read_text(encoding="utf-8"))
     print(f"[info] loaded {len(shots)} shots")
 
-    rows = analyze_shots(shots, FRAMES_DIR)
+    meta_path = PROCESSED / "metadata.json"
+    metadata = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+    frame_fps = float(metadata.get("frame_fps") or 1)
+    print(f"[info] frames extracted at {frame_fps:g} fps")
+
+    rows = analyze_shots(shots, FRAMES_DIR, frame_fps)
 
     out_csv = PROCESSED / "shot_camera.csv"
     cols = ["shot_idx", "start_sec", "end_sec", "duration_sec", "n_frames",

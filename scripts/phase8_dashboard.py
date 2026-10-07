@@ -25,7 +25,7 @@ if "PROCESSED_DIR" in os.environ:
 REPORTS = REPO_ROOT / "reports"
 if "REPORTS_DIR" in os.environ:
     REPORTS = Path(os.environ["REPORTS_DIR"])
-REPORTS.mkdir(exist_ok=True)
+REPORTS.mkdir(parents=True, exist_ok=True)
 
 
 MOOD_TAGS = [
@@ -47,11 +47,16 @@ EMOTION_COLORS = {
     "playful": "#f5c518", "whimsical": "#f5c518",
     "dark": "#000000", "ominous": "#000000",
     "peaceful": "#17becf",
+    # Canonical labels from _normalize_emotion that had no color
+    "sensual": "#c2185b", "energetic": "#8c564b", "intense": "#bcbd22",
+    "fearful": "#7f3c8d", "surprised": "#17becf", "disgusted": "#556b2f",
 }
 
 
 def color_for_emotion(emotion_text: str) -> str:
-    e = (emotion_text or "").lower()
+    e = (emotion_text or "").lower().strip()
+    if e in EMOTION_COLORS:
+        return EMOTION_COLORS[e]
     for k, c in EMOTION_COLORS.items():
         if k in e:
             return c
@@ -128,20 +133,16 @@ def main() -> int:
     ), row=1, col=1)
 
     # Add emotion legend
-    seen_emotions = set()
     for emotion in sorted(set(emotion_texts)):
-        c = color_for_emotion(emotion)
-        if c not in seen_emotions:
-            seen_emotions.add(c)
-            fig.add_trace(go.Bar(
-                x=[None], y=[None], marker_color=c, name=emotion,
-                showlegend=True, hoverinfo="skip",
-            ), row=1, col=1)
+        fig.add_trace(go.Bar(
+            x=[None], y=[None], marker_color=color_for_emotion(emotion), name=emotion or "(none)",
+            showlegend=True, hoverinfo="skip",
+        ), row=1, col=1)
 
     # Row 2: CLAP mood curves
     clap_path = PROCESSED / "audio_clap.csv"
-    if clap_path.exists():
-        clap = list(csv.DictReader(clap_path.open(encoding="utf-8")))
+    clap = list(csv.DictReader(clap_path.open(encoding="utf-8"))) if clap_path.exists() else []
+    if len(clap) >= 2:  # variance needs at least two windows
         import statistics
         variances = {tag: statistics.variance([float(r[tag]) for r in clap]) for tag in MOOD_TAGS if tag in clap[0]}
         top4 = sorted(variances, key=variances.get, reverse=True)[:4]
@@ -154,7 +155,8 @@ def main() -> int:
             ), row=2, col=1)
 
     # Row 3: RMS energy + beat ticks
-    music = list(csv.DictReader((PROCESSED / "music_features.csv").open(encoding="utf-8")))
+    music_path = PROCESSED / "music_features.csv"
+    music = list(csv.DictReader(music_path.open(encoding="utf-8"))) if music_path.exists() else []
     if music:
         xs = [float(r["start_sec"]) for r in music]
         ys = [float(r["rms_energy"]) for r in music]
@@ -173,7 +175,8 @@ def main() -> int:
         ), row=3, col=1)
 
     # Row 4: lyrics as colored bars
-    transcript = list(csv.DictReader((PROCESSED / "transcript.csv").open(encoding="utf-8")))
+    transcript_path = PROCESSED / "transcript.csv"
+    transcript = list(csv.DictReader(transcript_path.open(encoding="utf-8"))) if transcript_path.exists() else []
     if transcript:
         for t in transcript:
             s, e = float(t["start_sec"]), float(t["end_sec"])
@@ -228,24 +231,31 @@ def main() -> int:
 
     # VLM camera vs OpenCV camera comparison table
     vlm_counts = Counter(s.get("vision_camera_from_vlm", "") or "(none)" for s in shots)
-    agreement_count = sum(1 for s in shots
-                           if (s.get("camera_motion", "") or "")
-                           and (s.get("vision_camera_from_vlm", "") or "")
-                           and s.get("camera_motion") == s.get("vision_camera_from_vlm"))
-    agreement_pct = round(100 * agreement_count / max(1, len([s for s in shots if s.get("vision_camera_from_vlm")])), 1)
+    # OpenCV emits directional labels (pan-left, tilt-up); the VLM vocabulary has
+    # plain pan/tilt. Map both onto the shared vocabulary before comparing.
+    def _cam_family(label: str) -> str:
+        label = (label or "").strip().lower()
+        for fam in ("pan", "tilt"):
+            if label.startswith(fam):
+                return fam
+        return label
+    compared = [s for s in shots if s.get("camera_motion") and s.get("vision_camera_from_vlm")]
+    agreement_count = sum(1 for s in compared
+                          if _cam_family(s["camera_motion"]) == _cam_family(s["vision_camera_from_vlm"]))
+    agreement_pct = round(100 * agreement_count / max(1, len(compared)), 1)
 
     vlm_cam_html = f"<table border='1' style='border-collapse:collapse;font-family:monospace;font-size:12px;'>"
     vlm_cam_html += "<tr><th style='padding:6px 12px;background:#eee;'>Source</th><th style='padding:6px 12px;background:#eee;'>Method</th><th style='padding:6px 12px;background:#eee;'>Top motion</th><th style='padding:6px 12px;background:#eee;'>Shot count</th></tr>"
     # OpenCV row
     top_opencv = cam_counts.most_common(1)[0] if cam_counts else ("?", 0)
-    vlm_cam_html += f"<tr><td style='padding:6px 12px;'><b>OpenCV</b></td><td style='padding:6px 12px;'>optical flow (50 frames per shot)</td><td style='padding:6px 12px;'>{top_opencv[0]}</td><td style='padding:6px 12px;'>{top_opencv[1]} ({100*top_opencv[1]/len(shots):.0f}%)</td></tr>"
+    vlm_cam_html += f"<tr><td style='padding:6px 12px;'><b>OpenCV</b></td><td style='padding:6px 12px;'>optical flow (all extracted frames in the shot)</td><td style='padding:6px 12px;'>{top_opencv[0]}</td><td style='padding:6px 12px;'>{top_opencv[1]} ({100*top_opencv[1]/max(1, len(shots)):.0f}%)</td></tr>"
     # VLM row
     top_vlm = vlm_counts.most_common(1)[0] if vlm_counts else ("?", 0)
     vlm_cam_html += f"<tr><td style='padding:6px 12px;'><b>Gemini 3 Flash</b></td><td style='padding:6px 12px;'>single mid-frame per shot</td><td style='padding:6px 12px;'>{top_vlm[0]}</td><td style='padding:6px 12px;'>{top_vlm[1]} ({100*top_vlm[1]/max(1, len(shots)):.0f}%)</td></tr>"
     # Agreement row
-    vlm_cam_html += f"<tr><td style='padding:6px 12px;'><b>Agreement</b></td><td style='padding:6px 12px;'>shot-level exact-match</td><td style='padding:6px 12px;'>-</td><td style='padding:6px 12px;'>{agreement_count}/{len(shots)} = <b>{agreement_pct}%</b></td></tr>"
+    vlm_cam_html += f"<tr><td style='padding:6px 12px;'><b>Agreement</b></td><td style='padding:6px 12px;'>shot-level match (pan/tilt direction ignored)</td><td style='padding:6px 12px;'>-</td><td style='padding:6px 12px;'>{agreement_count}/{len(compared)} = <b>{agreement_pct}%</b></td></tr>"
     vlm_cam_html += "</table>"
-    vlm_cam_html += "<p style='font-size:11px;color:#666;margin-top:4px;'>The mid-frame alone cannot show camera motion (Gemini sees 1 instant). OpenCV optical flow sees 50+ frames per shot and is genuinely better at detecting pan/tilt/zoom. The VLM still helps with semantic understanding (what the subject is doing). Both signals are kept separately in <code>sync_per_shot.csv</code> as <code>camera_motion</code> and <code>vision_camera_from_vlm</code>.</p>"
+    vlm_cam_html += "<p style='font-size:11px;color:#666;margin-top:4px;'>The mid-frame alone cannot show camera motion (Gemini sees 1 instant). OpenCV optical flow sees every extracted frame in the shot and is genuinely better at detecting pan/tilt/zoom. The VLM still helps with semantic understanding (what the subject is doing). Both signals are kept separately in <code>sync_per_shot.csv</code> as <code>camera_motion</code> and <code>vision_camera_from_vlm</code>.</p>"
 
     # ===== Chart 4: Audio mood averages =====
     clap_loaded = list(csv.DictReader(clap_path.open(encoding="utf-8"))) if clap_path.exists() else []
@@ -347,18 +357,22 @@ def main() -> int:
     findings = []
     findings.append(f"<li>Detected <b>{len(shots)} shots</b> using <b>{shot_stats.get('detector', 'PySceneDetect-ContentDetector')}</b> "
                    f"(threshold={shot_stats.get('threshold', '?')}, min_scene_len={shot_stats.get('min_scene_len_frames', '?')} frames).</li>")
-    findings.append(f"<li>Shot duration: avg <b>{shot_stats.get('avg_shot_duration_sec', '?'):.1f}s</b>, "
-                   f"min <b>{shot_stats.get('min_shot_duration_sec', '?'):.1f}s</b>, "
-                   f"max <b>{shot_stats.get('max_shot_duration_sec', '?'):.1f}s</b>.</li>")
+    if shot_stats:
+        findings.append(f"<li>Shot duration: avg <b>{shot_stats['avg_shot_duration_sec']:.1f}s</b>, "
+                       f"min <b>{shot_stats['min_shot_duration_sec']:.1f}s</b>, "
+                       f"max <b>{shot_stats['max_shot_duration_sec']:.1f}s</b>.</li>")
     if stats.get("cuts_on_beat") is not None and len(shots) > 0:
-        findings.append(f"<li><b>{stats['cuts_on_beat']}/{stats['total_shots']} cuts</b> on a beat "
-                       f"({stats['cuts_on_beat_pct']}%) — within 100ms tolerance.</li>")
+        chance = stats.get("cuts_on_beat_chance_pct")
+        findings.append(f"<li><b>{stats['cuts_on_beat']}/{stats.get('total_cuts', stats['total_shots'])} cuts</b> on a beat "
+                       f"({stats['cuts_on_beat_pct']}%) — within 100ms tolerance"
+                       + (f"; random cut placement would land on a beat <b>{chance}%</b> of the time" if chance is not None else "")
+                       + ".</li>")
     if stats.get("shots_with_lyrics"):
         findings.append(f"<li><b>{stats['shots_with_lyrics']}/{stats['total_shots']} shots</b> contain spoken/sung lyrics "
                        f"({stats['shots_with_lyrics_pct']}%).</li>")
     if music_summary.get("tempo_bpm"):
         findings.append(f"<li>Music: <b>{music_summary['tempo_bpm']} BPM</b>, key <b>{music_summary.get('key', '?')}</b> "
-                       f"({music_summary.get('n_beats', '?')} beats across {music_summary.get('duration_sec', '?'):.0f}s).</li>")
+                       f"({music_summary.get('n_beats', '?')} beats across {float(music_summary.get('duration_sec', 0)):.0f}s).</li>")
     if clap_loaded:
         top_mood = max(MOOD_TAGS, key=lambda t: sum(float(r[t]) for r in clap_loaded) / len(clap_loaded))
         findings.append(f"<li>Dominant audio mood (CLAP): <b>{top_mood}</b></li>")
@@ -384,7 +398,7 @@ def main() -> int:
     dq_items.append(("Music structure", f"{'✓' if music_summary else '⚠'} {music_summary.get('n_beats', 0)} beats, {music_summary.get('tempo_bpm', '?')} BPM"))
     dq_html = "<table border='1' style='border-collapse:collapse;font-family:monospace;'>"
     for label, status in dq_items:
-        dq_html += f"<tr><td style='padding:6px 12px;font-weight:bold;'>{label}</td><td style='padding:6px 12px;'>{status}</td></tr>"
+        dq_html += f"<tr><td style='padding:6px 12px;font-weight:bold;'>{html_lib.escape(label)}</td><td style='padding:6px 12px;'>{html_lib.escape(status)}</td></tr>"
     dq_html += "</table>"
 
     # ===== Methodology caveat =====

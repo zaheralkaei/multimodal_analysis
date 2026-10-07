@@ -1,7 +1,7 @@
 """
 Phase 1 — Shot boundary detection with PySceneDetect.
 
-Reads:  data/processed/frames/frame_*.jpg + data/raw/video.mp4 (from Phase 0)
+Reads:  data/processed/metadata.json + frames/frame_*.jpg + source video (from Phase 0)
 Writes: data/processed/shots.json — list of {start_sec, end_sec, mid_sec, mid_frame_path}
         data/processed/shot_predictions.csv — per-frame scene scores (debug)
         data/processed/shot_detection_stats.json — detection metadata
@@ -22,11 +22,11 @@ Why not TransNetV2?
   - PySceneDetect's ContentDetector found 4x more boundaries on the same video
 
 Parameters you can tune:
-  --threshold  27.0     delta-Y (luminance) threshold per block
-  --min-scene-len  15  minimum shot length in frames (avoids flicker detection)
+  --threshold  35.0     weighted HSV + edge delta threshold between frames
+  --min-scene-len  30  minimum shot length in frames (avoids flicker detection)
 """
 from __future__ import annotations
-import argparse, json, os, sys
+import argparse, json, math, os, sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -37,7 +37,28 @@ RAW = REPO_ROOT / "data" / "raw"
 FRAMES_DIR = PROCESSED / "frames"
 
 
-def detect_shots(video_path: Path, threshold: float, min_scene_len: int) -> list[dict]:
+def load_metadata() -> dict:
+    """Read Phase 0's metadata.json (empty dict if missing)."""
+    meta_path = PROCESSED / "metadata.json"
+    if meta_path.exists():
+        return json.loads(meta_path.read_text(encoding="utf-8"))
+    return {}
+
+
+def frame_for_time(t: float, frame_fps: float, n_extracted: int) -> int:
+    """1-indexed frame_%05d.jpg number nearest to time t.
+
+    ffmpeg's fps filter emits output frame k (0-indexed) at t = k / frame_fps
+    and names it frame_{k+1}.
+    """
+    idx = int(round(t * frame_fps)) + 1
+    if n_extracted:
+        idx = min(idx, n_extracted)
+    return max(1, idx)
+
+
+def detect_shots(video_path: Path, threshold: float, min_scene_len: int,
+                 frame_fps: float = 1.0) -> tuple[list[dict], float, int]:
     """Run PySceneDetect ContentDetector on the video. Returns shot list."""
     from scenedetect import open_video, SceneManager, ContentDetector
 
@@ -62,6 +83,7 @@ def detect_shots(video_path: Path, threshold: float, min_scene_len: int) -> list
     scene_list = sm.get_scene_list()  # [(start, end), ...] as FrameTimecode pairs
 
     # Convert to our shot schema
+    n_extracted = len(list(FRAMES_DIR.glob("frame_*.jpg")))
     shots = []
     for idx, (start_tc, end_tc) in enumerate(scene_list):
         start_sec = start_tc.get_seconds()
@@ -71,12 +93,13 @@ def detect_shots(video_path: Path, threshold: float, min_scene_len: int) -> list
         duration = end_sec - start_sec
         mid_sec = (start_sec + end_sec) / 2
 
-        # Find the closest frame file (1fps extraction)
-        mid_frame_idx = int(mid_sec) + 1  # 1-indexed
+        # Find the extracted frame closest to the shot's midpoint
+        mid_frame_idx = frame_for_time(mid_sec, frame_fps, n_extracted)
         # Path is relative to REPO_ROOT, points to OUR frames dir
         mid_frame_path = str(FRAMES_DIR / f"frame_{mid_frame_idx:05d}.jpg")
         mid_frame_path = str(Path(mid_frame_path).relative_to(REPO_ROOT))
-        n_frames_in_shot = int(duration) + 1
+        # Extracted frames whose timestamp k/frame_fps falls in [start, end)
+        n_frames_in_shot = max(0, math.ceil(end_sec * frame_fps) - math.ceil(start_sec * frame_fps))
 
         shots.append({
             "shot_idx": idx,
@@ -96,11 +119,13 @@ def main() -> int:
                        help="ContentDetector threshold (default 35.0, lower = more sensitive)")
     parser.add_argument("--min-scene-len", type=int, default=30,
                        help="Minimum shot length in frames (default 30 ≈ 1.25s at 24fps)")
-    parser.add_argument("--video", default=str(RAW / "video.mp4"),
-                       help="Path to source video (default: data/raw/video.mp4)")
+    parser.add_argument("--video", default=None,
+                       help="Path to source video (default: source_file from Phase 0's metadata.json)")
     args = parser.parse_args()
 
-    video_path = Path(args.video)
+    metadata = load_metadata()
+    frame_fps = float(metadata.get("frame_fps") or 1)
+    video_path = Path(args.video or metadata.get("source_file") or RAW / "video.mp4")
     if not video_path.exists():
         print(f"[error] video not found: {video_path}")
         print("  run phase 0 first: python scripts/phase0_input.py <source>")
@@ -110,7 +135,7 @@ def main() -> int:
     print(f"  threshold = {args.threshold}")
     print(f"  min_scene_len = {args.min_scene_len} frames")
 
-    shots, fps, total_frames = detect_shots(video_path, args.threshold, args.min_scene_len)
+    shots, fps, total_frames = detect_shots(video_path, args.threshold, args.min_scene_len, frame_fps)
     print(f"[ok] detected {len(shots)} shots")
 
     # Write shots.json
@@ -125,7 +150,7 @@ def main() -> int:
     # Build a frame → "is_boundary" map
     boundary_frames = set()
     for s in shots:
-        boundary_frames.add(int(s["start_sec"] * fps))
+        boundary_frames.add(int(round(s["start_sec"] * fps)))
     with pred_path.open("w", encoding="utf-8", newline="") as f:
         w = csv.writer(f)
         w.writerow(["frame", "time_sec", "is_boundary", "shot_idx"])
@@ -162,7 +187,7 @@ def main() -> int:
         "avg_shot_duration_sec": round(sum(s["duration_sec"] for s in shots) / max(1, len(shots)), 3),
         "min_shot_duration_sec": round(min((s["duration_sec"] for s in shots), default=0), 3),
         "max_shot_duration_sec": round(max((s["duration_sec"] for s in shots), default=0), 3),
-        "video_path": str(video_path.relative_to(REPO_ROOT)),
+        "video_path": _display_path(video_path),
     }
     stats_path = PROCESSED / "shot_detection_stats.json"
     stats_path.write_text(json.dumps(stats, indent=2) + "\n", encoding="utf-8")
@@ -176,6 +201,14 @@ def main() -> int:
 
     print(f"\n[next] Phase 2: python scripts/phase2_vision.py")
     return 0
+
+
+def _display_path(p: Path) -> str:
+    """Repo-relative path when possible (local sources may live outside the repo)."""
+    try:
+        return str(p.resolve().relative_to(REPO_ROOT))
+    except ValueError:
+        return str(p)
 
 
 def _get_scenedetect_version() -> str:

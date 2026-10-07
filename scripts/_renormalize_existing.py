@@ -8,11 +8,13 @@ Usage:
     # Writes data/processed/shot_vision_normalized.csv (does NOT overwrite original)
 """
 from __future__ import annotations
-import csv, sys
+import csv, os, sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROCESSED = REPO_ROOT / "data" / "processed"
+if "PROCESSED_DIR" in os.environ:
+    PROCESSED = Path(os.environ["PROCESSED_DIR"])
 sys.path.insert(0, str(Path(__file__).parent))
 from _normalize_emotion import normalize_emotion
 

@@ -12,6 +12,7 @@ flow), 5 fps is 4× the storage for marginal gain, 24 fps is overkill.
 """
 from __future__ import annotations
 import argparse, json, os, subprocess, sys
+from fractions import Fraction
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -31,13 +32,18 @@ def have_ffmpeg() -> bool:
         return False
 
 
-def get_video(source: str) -> Path:
-    """Return path to local video file. Downloads if source is a URL."""
+def get_video(source: str, video_id: str = "video") -> Path:
+    """Return path to local video file. Downloads if source is a URL.
+
+    Downloads go to data/raw/<video_id>.mp4. yt-dlp skips the download when
+    that file already exists, so each video needs its own name — a shared
+    name would silently reuse the previous video.
+    """
     RAW.mkdir(parents=True, exist_ok=True)
     if source.startswith("http://") or source.startswith("https://"):
         # try yt-dlp first
         try:
-            out = RAW / "video.mp4"
+            out = RAW / f"{video_id}.mp4"
             print(f"[info] downloading {source} via yt-dlp ...")
             subprocess.run([sys.executable, "-m", "yt_dlp", "-o", str(out),
                            "-f", "best[ext=mp4]/best", source],
@@ -57,6 +63,15 @@ def get_video(source: str) -> Path:
         return p
 
 
+def _parse_rate(rate: str | None) -> float | None:
+    """Parse an ffprobe rate like '24000/1001' into a float."""
+    try:
+        r = Fraction(rate)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    return float(r) if r else None
+
+
 def extract_metadata(video: Path) -> dict:
     """Use ffprobe to extract video metadata."""
     cmd = [
@@ -69,7 +84,7 @@ def extract_metadata(video: Path) -> dict:
     v = next((s for s in meta.get("streams", []) if s.get("codec_type") == "video"), {})
     fmt = meta.get("format", {})
     return {
-        "source_file": str(video),
+        "source_file": str(video.resolve()),
         "duration_sec": float(fmt.get("duration", 0)),
         "size_bytes": int(fmt.get("size", 0)),
         "bit_rate": int(fmt.get("bit_rate", 0)),
@@ -77,7 +92,7 @@ def extract_metadata(video: Path) -> dict:
             "codec": v.get("codec_name"),
             "width": v.get("width"),
             "height": v.get("height"),
-            "fps": eval(v.get("r_frame_rate", "0/1")) if v.get("r_frame_rate") else None,
+            "fps": _parse_rate(v.get("r_frame_rate")),
             "nb_frames": v.get("nb_frames"),
         },
     }
@@ -125,6 +140,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("source", help="YouTube URL or local video path")
     parser.add_argument("--fps", type=int, default=2, help="frames per second to extract")
+    parser.add_argument("--video-id", default="video",
+                        help="file name (without .mp4) for URL downloads in data/raw/ (default: video)")
     args = parser.parse_args()
 
     if not have_ffmpeg():
@@ -134,8 +151,8 @@ def main() -> int:
     PROCESSED.mkdir(parents=True, exist_ok=True)
     FRAMES_DIR.mkdir(parents=True, exist_ok=True)
 
-    video = get_video(args.source)
-    print(f"[ok] video: {video.relative_to(REPO_ROOT)} ({video.stat().st_size:,} bytes)")
+    video = get_video(args.source, args.video_id)
+    print(f"[ok] video: {video} ({video.stat().st_size:,} bytes)")
 
     meta = extract_metadata(video)
     print(f"[info] duration: {meta['duration_sec']:.1f}s, "

@@ -66,6 +66,8 @@ def analyze_music(audio_path: Path):
     # Tempo + beat positions
     print("[info] extracting tempo + beats ...")
     tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
+    # librosa >= 0.10.2 returns tempo as a 1-element array; NumPy 2 refuses float() on it
+    tempo = float(np.atleast_1d(tempo)[0])
     beat_times = librosa.frames_to_time(beat_frames, sr=sr)
     print(f"[info] tempo: {float(tempo):.1f} BPM, {len(beat_times)} beats")
 

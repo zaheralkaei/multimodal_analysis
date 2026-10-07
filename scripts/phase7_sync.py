@@ -31,6 +31,9 @@ if "PROCESSED_DIR" in os.environ:
     PROCESSED = Path(os.environ["PROCESSED_DIR"])
 
 
+BEAT_TOL_SEC = 0.1  # a cut within ±100ms of a beat counts as "on beat"
+
+
 def load_csv(path: Path) -> list[dict]:
     if not path.exists():
         return []
@@ -40,6 +43,30 @@ def load_csv(path: Path) -> list[dict]:
 
 def within_tolerance(a: float, b: float, tol: float) -> bool:
     return abs(a - b) <= tol
+
+
+def beat_window_coverage(beats: list[float], tol: float, t0: float, t1: float) -> float:
+    """Fraction of [t0, t1] lying within ±tol of some beat.
+
+    This is the cut-on-beat rate expected by chance if cuts were placed at
+    random times, i.e. the baseline the observed rate must beat.
+    """
+    if t1 <= t0 or not beats:
+        return 0.0
+    covered, cur_s, cur_e = 0.0, None, None
+    for b in sorted(beats):
+        s, e = max(t0, b - tol), min(t1, b + tol)
+        if e <= s:
+            continue
+        if cur_e is None or s > cur_e:
+            if cur_e is not None:
+                covered += cur_e - cur_s
+            cur_s, cur_e = s, e
+        else:
+            cur_e = max(cur_e, e)
+    if cur_e is not None:
+        covered += cur_e - cur_s
+    return covered / (t1 - t0)
 
 
 def join_data(shots: list[dict], vision: list[dict], camera: list[dict],
@@ -82,11 +109,13 @@ def join_data(shots: list[dict], vision: list[dict], camera: list[dict],
         lyrics_in_shot = [r for r in transcript if float(r["start_sec"]) < e and float(r["end_sec"]) > s and r.get("text", "").strip()]
         lyric_text = " | ".join(r["text"] for r in lyrics_in_shot)[:300]
 
-        # Cut on beat?
-        total_cuts += 1
-        is_cut_on_beat = any(within_tolerance(s, b, 0.1) for b in beats)
-        if is_cut_on_beat:
-            cut_on_beat_count += 1
+        # Cut on beat? The first shot starts at t=0, which is not a cut.
+        is_cut_on_beat = False
+        if i > 0:
+            total_cuts += 1
+            is_cut_on_beat = any(within_tolerance(s, b, BEAT_TOL_SEC) for b in beats)
+            if is_cut_on_beat:
+                cut_on_beat_count += 1
 
         rows.append({
             "shot_idx": i,
@@ -102,7 +131,7 @@ def join_data(shots: list[dict], vision: list[dict], camera: list[dict],
             "vision_location": v.get("location", ""),
             "vision_lighting": v.get("lighting", ""),
             "vision_composition": v.get("composition", ""),
-            "mid_frame": v.get("mid_frame", ""),  # propagate for dashboard thumbnails
+            "mid_frame": v.get("mid_frame") or shot.get("mid_frame_path", ""),  # propagate for dashboard thumbnails
             # Camera (from Phase 3)
             "camera_motion": c.get("camera_motion", ""),
             "camera_pan_score": c.get("pan_score_mean", ""),
@@ -121,10 +150,13 @@ def join_data(shots: list[dict], vision: list[dict], camera: list[dict],
         })
 
     # Stats
+    video_end = float(shots[-1]["end_sec"]) if shots else 0.0
     stats = {
-        "total_shots": total_cuts,
+        "total_shots": len(rows),
+        "total_cuts": total_cuts,
         "cuts_on_beat": cut_on_beat_count,
         "cuts_on_beat_pct": round(cut_on_beat_count / max(1, total_cuts) * 100, 1),
+        "cuts_on_beat_chance_pct": round(beat_window_coverage(beats, BEAT_TOL_SEC, 0.0, video_end) * 100, 1),
         "shots_with_lyrics": sum(1 for r in rows if r["n_lyric_segments"] > 0),
         "shots_with_lyrics_pct": round(
             sum(1 for r in rows if r["n_lyric_segments"] > 0) / max(1, len(rows)) * 100, 1
@@ -188,7 +220,8 @@ def main() -> int:
     print(f"[ok] wrote {out_json.relative_to(REPO_ROOT)}")
 
     print(f"\n[stats]")
-    print(f"  {stats['cuts_on_beat']}/{stats['total_shots']} shots cut on a beat ({stats['cuts_on_beat_pct']}%)")
+    print(f"  {stats['cuts_on_beat']}/{stats['total_cuts']} cuts on a beat ({stats['cuts_on_beat_pct']}%; "
+          f"chance level {stats['cuts_on_beat_chance_pct']}%)")
     print(f"  {stats['shots_with_lyrics']}/{stats['total_shots']} shots contain lyrics ({stats['shots_with_lyrics_pct']}%)")
     print(f"  total lyric segments: {stats['total_lyric_segments']} "
           f"({stats['total_lyric_chars']} chars)")
