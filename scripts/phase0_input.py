@@ -74,8 +74,13 @@ def resolve_downloaded(video_id: str, raw_dir: Path) -> Path:
     return candidates[0]
 
 
-def get_video(source: str, video_id: str) -> Path:
-    """Stage the video at data/raw/<video_id>.<ext> and return that path."""
+def get_video(source: str, video_id: str) -> tuple[Path, str | None]:
+    """Stage the video at data/raw/<video_id>.<ext> and return (path, source_url).
+
+    source_url is the original URL for downloads (recorded in metadata.json so
+    the dashboard can deep-link to video timestamps — UI audit U2), else None
+    for local files.
+    """
     if source.startswith("http://") or source.startswith("https://"):
         RAW.mkdir(parents=True, exist_ok=True)
         out_tpl = RAW / f"{video_id}.%(ext)s"
@@ -90,8 +95,8 @@ def get_video(source: str, video_id: str) -> Path:
         except subprocess.CalledProcessError as e:
             print(f"[error] yt-dlp failed: {e}")
             sys.exit(1)
-        return resolve_downloaded(video_id, RAW)
-    return stage_local(source, video_id, RAW)
+        return resolve_downloaded(video_id, RAW), source
+    return stage_local(source, video_id, RAW), None
 
 
 def extract_metadata(video: Path) -> dict:
@@ -180,10 +185,12 @@ def main() -> int:
     PROCESSED.mkdir(parents=True, exist_ok=True)
     FRAMES_DIR.mkdir(parents=True, exist_ok=True)
 
-    video = get_video(args.source, args.id)
+    video, source_url = get_video(args.source, args.id)
     print(f"[ok] video: {disp(video)} ({video.stat().st_size:,} bytes)")
 
     meta = extract_metadata(video)
+    if source_url:
+        meta["source_url"] = source_url  # dashboard deep-links (UI audit U2)
     print(f"[info] duration: {meta['duration_sec']:.1f}s, "
           f"{meta['video']['width']}x{meta['video']['height']}, "
           f"{meta['video']['fps']:.2f}fps" if meta['video']['fps'] else "")

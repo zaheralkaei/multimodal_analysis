@@ -23,6 +23,8 @@ Round-4 audit fixes:
 """
 from __future__ import annotations
 import argparse, html as html_lib, json, os, re, sys
+from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -94,6 +96,60 @@ def color_for_emotion(emotion_text: str) -> str:
 
 
 
+# Client-side per-shot table: search + dropdown filters + cut-on-beat filter +
+# click-a-header sort (UI audit U4). Uses the data-* attributes written onto
+# each row by main(); self-contained, no external JS.
+TABLE_JS = """
+<script>
+(function () {
+  var table = document.getElementById("shotTable");
+  if (!table) return;
+  var rows = Array.prototype.slice.call(table.querySelectorAll("tr")).slice(1);
+  var search = document.getElementById("tblSearch");
+  var emo = document.getElementById("tblEmotion");
+  var cam = document.getElementById("tblCamera");
+  var beat = document.getElementById("tblBeat");
+  var count = document.getElementById("tblCount");
+  function apply() {
+    var q = (search && search.value || "").toLowerCase();
+    var visible = 0;
+    rows.forEach(function (r) {
+      var blocked = (emo && emo.value && r.dataset.emotion !== emo.value) ||
+                    (cam && cam.value && r.dataset.camera !== cam.value) ||
+                    (beat && beat.checked && r.dataset.beat !== "1");
+      var hit = !q || r.textContent.toLowerCase().indexOf(q) !== -1;
+      var show = !blocked && hit;
+      r.style.display = show ? "" : "none";
+      if (show) visible++;
+    });
+    if (count) count.textContent = "showing " + visible + " / " + rows.length + " shots";
+  }
+  [search, emo, cam].forEach(function (el) { if (el) { el.addEventListener("input", apply); el.addEventListener("change", apply); } });
+  if (beat) beat.addEventListener("change", apply);
+  var dir = 1, lastCol = -1;
+  Array.prototype.forEach.call(table.querySelectorAll("th"), function (th, ci) {
+    th.style.cursor = "pointer";
+    th.addEventListener("click", function () {
+      var first = rows[0] && rows[0].children[ci];
+      var numeric = !!(first && first.dataset && first.dataset.v && !isNaN(parseFloat(first.dataset.v)));
+      dir = (ci === lastCol) ? -dir : 1;
+      lastCol = ci;
+      rows.sort(function (a, b) {
+        var av = numeric ? parseFloat(a.children[ci].dataset.v) : 0;
+        var bv = numeric ? parseFloat(b.children[ci].dataset.v) : 0;
+        if (numeric) return (av < bv ? -1 : av > bv ? 1 : 0) * dir;
+        var at = a.children[ci].textContent, bt = b.children[ci].textContent;
+        return at < bt ? -dir : at > bt ? dir : 0;
+      });
+      rows.forEach(function (r) { table.appendChild(r); });
+    });
+  });
+  apply();
+})();
+</script>
+"""
+
+
 def load_csv_rows(path: Path, label: str) -> list:
     """Read a CSV if it exists; warn (not crash) if missing (AUDIT_R4 F6)."""
     if not path.exists():
@@ -141,7 +197,24 @@ def main() -> int:
     # Vision model provenance — what ACTUALLY ran (AUDIT_R4 F4; never hardcode)
     vision_model_name = stats.get("vision_model", "unknown (phase 2 stats missing)")
 
-    from collections import Counter
+    # ===== Video identity & source deep-links (UI audit U1/U2) =====
+    video_id = PROCESSED.name
+    source_url = metadata.get("source_url")
+    if not source_url and re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        # Fallback: video ID looks like a YouTube ID (pre-round-5 metadata lacks
+        # source_url; local files never match the 11-char pattern)
+        source_url = f"https://youtu.be/{video_id}"
+    total_sec = max((float(s["end_sec"]) for s in shots), default=0.0)
+
+    def yt_link(sec: float) -> str:
+        """Anchor to the source video at `sec`, or '' when no source URL is known."""
+        if not source_url:
+            return ""
+        t = max(0, int(sec))
+        sep = "&" if "?" in source_url else "?"
+        return (f"<a href='{html_lib.escape(source_url)}{sep}t={t}' target='_blank' rel='noopener' "
+                f"style='color:#2c7fb8;text-decoration:none;' title='Open in video at {t}s'>&#9654;</a>")
+
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
@@ -316,7 +389,9 @@ def main() -> int:
         mood_avg_html = "<p><i>No CLAP data</i></p>"
 
     # ===== Chart 5: Per-shot detail table (all shots with thumbnails) =====
-    # Copy mid-frames to reports/frames/ so dashboard works as a self-contained file
+    # Columns (UI audit U3): the vision model answers 8 questions — previously
+    # only 3 were shown; colors/location/lighting/composition/entities and the
+    # cut-on-beat flag are surfaced here, camera scores as cell tooltips (U3).
     report_frames_dir = REPORTS / "frames"
     report_frames_dir.mkdir(parents=True, exist_ok=True)
     import shutil
@@ -339,9 +414,15 @@ def main() -> int:
                 n_copied += 1
     print(f"[info] copied {n_copied} mid-frames to {disp(report_frames_dir)} (skipped {n_skipped} that already match)")
 
-    table_rows = []
-    headers = ["Thumb", "#", "Time", "Dur", "Emotion", "Camera", "Caption", "Audio", "Lyrics"]
-    table_rows.append(headers)
+    headers = ["Thumb", "#", "Time", "Dur", "Emotion", "Camera", "Caption", "Audio",
+               "Colors", "Location", "Lighting", "Composition", "Entities", "Lyrics", "Beat"]
+    col_i = {name: i for i, name in enumerate(headers)}
+    header_cells = []
+    for name in headers:
+        header_cells.append(
+            f"<th style='padding:6px 8px;background:#eee;text-align:left;"
+            f"position:sticky;top:0;'>{name}</th>")
+    table_rows = ["".join(header_cells)]
     for i, s in enumerate(shots):
         lyrics = html_lib.escape(s.get("lyric_text", "") or "—")
         if len(lyrics) > 60:
@@ -351,46 +432,96 @@ def main() -> int:
         if mid_rel:
             # Use the reports/frames/ copy for self-contained HTML
             thumb_path = f"frames/{Path(mid_rel).name}"
-        table_rows.append([
-            thumb_path,
-            i,
-            f"{float(s['start_sec']):.1f}-{float(s['end_sec']):.1f}s",
-            f"{float(s['duration_sec']):.1f}s",
-            html_lib.escape(s.get("vision_emotion", "") or "—"),
-            html_lib.escape(s.get("camera_motion", "") or "—"),
-            html_lib.escape((s.get("vision_caption", "") or "—")[:80]),
-            html_lib.escape(s.get("audio_top_mood", "") or "—"),
-            lyrics,
-        ])
-    table_html = "<table id='shotTable' border='1' style='border-collapse:collapse;font-family:monospace;font-size:11px;width:100%;'>"
-    for ri, row in enumerate(table_rows):
-        is_header = (ri == 0)
-        tag = "th" if is_header else "td"
-        # Add background color to emotion cell
-        cells = []
-        for ci, cell in enumerate(row):
-            bg = "#eee" if is_header else ""
-            if is_header:
-                cells.append(f"<{tag} style='padding:6px 8px;background:#eee;text-align:left;'>{cell}</{tag}>")
-            elif ci == 0:  # thumbnail column
-                if cell:
+
+        # Camera-score tooltip (U3): the continuous scores behind the class
+        score_parts = []
+        for axis in ("pan", "tilt", "zoom"):
+            v = s.get(f"camera_{axis}_score", "")
+            if v not in ("", None):
+                try:
+                    score_parts.append(f"{axis} {float(v):+.2f}")
+                except (TypeError, ValueError):
+                    pass
+        cam_tooltip = " · ".join(score_parts)
+
+        cut_on_beat = 1 if str(s.get("cut_on_beat", "")).lower() == "true" else 0
+        start_s = float(s["start_sec"])
+        time_text = f"{start_s:.1f}-{float(s['end_sec']):.1f}s"
+
+        vals = {
+            "Thumb": thumb_path,
+            "#": str(i),
+            "Time": time_text,
+            "Dur": f"{float(s['duration_sec']):.1f}s",
+            "Emotion": html_lib.escape(s.get("vision_emotion", "") or "—"),
+            "Camera": html_lib.escape(s.get("camera_motion", "") or "—"),
+            "Caption": html_lib.escape((s.get("vision_caption", "") or "—")[:80]),
+            "Audio": html_lib.escape(s.get("audio_top_mood", "") or "—"),
+            "Colors": html_lib.escape(s.get("vision_colors", "") or "—"),
+            "Location": html_lib.escape(s.get("vision_location", "") or "—"),
+            "Lighting": html_lib.escape(s.get("vision_lighting", "") or "—"),
+            "Composition": html_lib.escape(s.get("vision_composition", "") or "—"),
+            "Entities": html_lib.escape((s.get("vision_entities", "") or "—")[:40]),
+            "Lyrics": lyrics,
+            "Beat": "♩" if cut_on_beat else "",
+        }
+        row_attrs = (f" data-i='{i}' data-start='{start_s:.3f}'"
+                     f" data-emotion='{html_lib.escape(vals['Emotion']).replace(chr(39), '')}'"
+                     f" data-camera='{html_lib.escape(vals['Camera']).replace(chr(39), '')}'"
+                     f" data-beat='{cut_on_beat}'")
+        cells = [f"<tr{row_attrs}>"]
+        for name in headers:
+            tag, v = "td", vals[name]
+            sort_key = ""
+            if name == "#" or name == "Dur":
+                sort_key = f" data-v='{v.rstrip('s')}'"
+            elif name == "Time":
+                sort_key = f" data-v='{start_s:.3f}'"
+            if name == "Thumb":
+                if v:
                     cells.append(f"<{tag} style='padding:2px;background:#fff;text-align:center;'>"
-                                 f"<img src='{cell}' loading='lazy' "
+                                 f"<img src='{v}' loading='lazy' alt='shot {i} mid-frame' "
                                  f"style='width:100px;height:auto;border:2px solid #555;cursor:pointer;' "
                                  f"onclick='window.open(this.src,\"_blank\")'/>"
                                  f"</{tag}>")
                 else:
-                    cells.append(f"<{tag} style='padding:4px 8px;background:{bg};text-align:left;'>—</{tag}>")
-            elif ci == 4:  # emotion column
-                bg = color_for_emotion(str(cell))
+                    cells.append(f"<{tag} style='padding:4px 8px;text-align:left;'>—</{tag}>")
+            elif name == "Emotion":
+                bg = color_for_emotion(str(v))
                 text_color = "white" if bg in ["#1f77b4", "#9467bd", "#d62728", "#c0392b",
                                                "#8c564b", "#6495ed"] else "black"
-                cells.append(f"<{tag} style='padding:4px 8px;background:{bg};color:{text_color};text-align:left;'>{cell}</{tag}>")
+                cells.append(f"<{tag} style='padding:4px 8px;background:{bg};color:{text_color};text-align:left;'>{v}</{tag}>")
+            elif name == "Camera" and cam_tooltip:
+                cells.append(f"<{tag} title='{html_lib.escape(cam_tooltip)}' "
+                             f"style='padding:4px 8px;text-align:left;'>{v}</{tag}>")
+            elif name == "Time":
+                cells.append(f"<{tag}{sort_key} style='padding:4px 8px;text-align:left;"
+                             f"white-space:nowrap;'>{v} {yt_link(start_s)}</{tag}>")
             else:
-                cells.append(f"<{tag} style='padding:4px 8px;background:{bg};text-align:left;'>{cell}</{tag}>")
-        table_html += "<tr>" + "".join(cells) + "</tr>"
+                cells.append(f"<{tag}{sort_key} style='padding:4px 8px;text-align:left;'>{v}</{tag}>")
+        cells.append("</tr>")
+        table_rows.append("".join(cells))
+
+    table_html = ("<table id='shotTable' border='1' "
+                  "style='border-collapse:collapse;font-family:monospace;font-size:11px;width:100%;'>")
+    table_html += "".join(table_rows)
     table_html += "</table>"
-    table_html += "<p style='font-size:11px;color:#666;margin-top:4px;'>Click any thumbnail to view full-size.</p>"
+    table_html += "<p style='font-size:11px;color:#666;margin-top:4px;'>Click any thumbnail to view full-size; ▶ opens the source video at that shot's start; click a column header to sort.</p>"
+
+    # Per-shot filter bar + sort (UI audit U4)
+    n_emotions = sorted({s.get("vision_emotion", "") for s in shots} - {""})
+    n_cameras = sorted({s.get("camera_motion", "") for s in shots} - {""})
+    emo_opts = "".join(f"<option value='{html_lib.escape(e)}'>{html_lib.escape(e)}</option>" for e in n_emotions)
+    cam_opts = "".join(f"<option value='{html_lib.escape(c)}'>{html_lib.escape(c)}</option>" for c in n_cameras)
+    table_controls_html = f"""
+<div style="margin:8px 0;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+  <input id="tblSearch" type="text" placeholder="Search text (caption, lyrics…)" style="padding:6px 8px;width:240px;">
+  <select id="tblEmotion" style="padding:6px;"><option value="">Emotion: all</option>{emo_opts}</select>
+  <select id="tblCamera" style="padding:6px;"><option value="">Camera: all</option>{cam_opts}</select>
+  <label style="font-size:12px;"><input type="checkbox" id="tblBeat" style="margin-right:4px;">only cuts on beat</label>
+  <span id="tblCount" style="font-size:11px;color:#666;"></span>
+</div>"""
+    table_html += table_controls_html + TABLE_JS
 
     # ===== Honest findings =====
     findings = []
@@ -416,7 +547,11 @@ def main() -> int:
     if emotion_counts:
         top_emotion = emotion_counts.most_common(1)[0]
         findings.append(f"<li>Most common visual emotion: <b>{html_lib.escape(str(top_emotion[0]))}</b> ({top_emotion[1]} shots, "
-                        f"{top_emotion[1]/max(1, n_shots)*100:.0f}%) — vision model: {safe_model}</li>")
+                        f"{top_emotion[1]/max(1, n_shots)*100:.0f}%) — vision model: {safe_model} "
+                        f"(<a href='#shots-table'>see per-shot table</a> — filter by emotion or search text).</li>")
+    if source_url:
+        findings.append(f"<li>Source: <a href='{html_lib.escape(source_url)}' target='_blank' rel='noopener'>{html_lib.escape(source_url)}</a> "
+                        f"— every &#9654; glyph in the per-shot table deep-links to the shot's start time.</li>")
     findings_html = "<ul>" + "".join(findings) + "</ul>"
 
     # ===== Data quality section =====
@@ -447,12 +582,13 @@ def main() -> int:
     """
 
     # ===== Build full HTML =====
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     full_html = f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Multimodal Video Analysis Dashboard</title>
+  <title>{video_id} — Multimodal Video Analysis</title>
   <style>
     body {{ font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 1400px; margin: 0 auto; padding: 20px; color: #222; line-height: 1.5; }}
     h1 {{ border-bottom: 2px solid #333; padding-bottom: 8px; }}
@@ -470,9 +606,12 @@ def main() -> int:
 </head>
 <body>
 
-<h1>Multimodal Video Analysis</h1>
+<h1>{html_lib.escape(video_id)} — multimodal video analysis</h1>
 <p style="background:#e8f4f8; padding:10px 16px; border-left:4px solid #2c7fb8; margin: 16px 0;">
-  <b>Frame extraction:</b> {n_frames_extracted} frames at <b>{extracted_fps} fps</b>
+  <b>Video:</b> {html_lib.escape(video_id)}
+  {f'<a href="{html_lib.escape(source_url)}" target="_blank" rel="noopener">&#9654; open source video</a>' if source_url else ''}
+  &middot; duration ~{total_sec:.0f}s &middot; {n_shots} shots &middot; generated {generated_at}
+  <br><b>Frame extraction:</b> {n_frames_extracted} frames at <b>{extracted_fps} fps</b>
   (video native: {round(float(video_fps), 1) if video_fps != '?' else '?'} fps).
   Camera motion classification depends on this rate — at 2 fps we get 0.5s
   time resolution. See README.md "Sampling-rate decision" for the trade-off
@@ -505,7 +644,7 @@ def main() -> int:
 <div class="panel">{vlm_cam_html}</div>
 <div class="panel">{mood_avg_html}</div>
 
-<h2>3. Per-shot detail ({n_shots} shots total)</h2>
+<h2 id="shots-table">3. Per-shot detail ({n_shots} shots total)</h2>
 <p class="section-subtitle"><b>Method:</b> One row per shot from PySceneDetect ContentDetector. <b>Thumbnail</b> = mid-frame of the shot (the same image sent to the vision model). <b>Emotion</b> = {safe_model} answer to "What is the dominant emotion shown?". <b>Camera</b> = OpenCV optical flow dominant motion class for the shot. <b>Caption</b> = first 80 chars of {safe_model} caption. <b>Audio</b> = highest-probability CLAP mood tag averaged across the shot's duration. <b>Lyrics</b> = faster-whisper text overlapping the shot (truncated to 60 chars).</p>
 {table_html}
 
