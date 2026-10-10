@@ -257,16 +257,21 @@ multimodal_analysis/
 
 ## Models and what they do
 
-| Phase | Model | What it analyzes | Capabilities | Limits |
+Only phase 2 calls a hosted model over the internet. Phases 4 and 5 run local
+ML models (downloaded once, cached); phases 1, 3, 6, 7 and the content-type
+detector are classical algorithms / deterministic code — no ML, no API.
+
+| Phase | Model | Kind of model | What it analyzes | Limits |
 |---|---|---|---|---|
-| 1 (shots) | PySceneDetect ContentDetector | Visual scene changes | BSD-3-Clause, ~5K⭐, 5 detector algorithms | Reads video directly, no frame-rate dep |
-| 2 (vision) | **google/gemma-4-31b-it** via OpenRouter | Per-shot caption, camera, emotion, colors, entities, location, lighting, composition | 1-2s per call, JSON-mode, free tier ~10K calls/day | Single mid-frame per shot (can't see motion) |
-| 3 (camera) | OpenCV Farneback optical flow | Camera motion (pan/tilt/zoom/static) | Local, free, no API | 8 discrete classes (no magnitude) |
-| 4 (transcription) | **faster-whisper small** (multilingual) | Spoken/sung words | 99 languages, ~5MB model | Hallucinates on silence/music |
-| 5 (audio) | **CLAP** (laion/clap-htsat-fused) | 27 audio tags (mood, section, instrument) | 48kHz, 27 predefined tags | Vocabulary locked at design time |
-| 6 (music) | librosa | Tempo, beats, key, RMS energy | Pure signal processing | Beat detection fails on rubato music |
-| 7 (sync) | rule-based | Cross-modal joins + stats | Deterministic | ±100ms beat tolerance is arbitrary |
-| 8 (dashboard) | Plotly | HTML visualization | Interactive, single-file | Self-contained but not mobile-optimized |
+| 0 (input) | ffmpeg + yt-dlp | not a model — media tools | download, frame extraction, audio decode | — |
+| 1 (shots) | PySceneDetect ContentDetector | classical computer-vision threshold detector (no ML) | visual scene changes | threshold is tuned per content type; compression artifacts can cause false cuts |
+| 2 (vision) | **google/gemma-4-31b-it** via OpenRouter | vision-language LLM (multimodal transformer: text + image in, text out), Ollama fallback | per-shot caption, camera, emotion, colors, entities, location, lighting, composition | sees one mid-frame per shot (can't see motion); JSON-mode prompt, temperature 0, seed 42 |
+| 3 (camera) | OpenCV Farneback | classical computer vision (dense optical flow) | camera motion (pan/tilt/zoom/static) | 8 discrete classes, no magnitude; zoom-in bias at low fps |
+| 4 (transcription) | **faster-whisper small** | speech-to-text ASR (transformer, CTranslate2-quantized) | spoken/sung words, 99 languages | hallucinates on silence/music; sized via `--whisper-model` |
+| 5 (audio) | **CLAP** (laion/clap-htsat-fused) | contrastive audio-text transformer (audio tagging) | 27 audio tags (mood, section, instrument) | vocabulary locked at design time; similarity ≠ presence |
+| 6 (music) | librosa + Krumhansl-Schmuckler | DSP + statistical template matching (no ML) | tempo, beats, key, RMS energy | beat detection fails on rubato music |
+| 7 (sync) | rules | deterministic joins | cross-modal per-shot table + stats | ±100ms beat tolerance is arbitrary |
+| 8 (dashboard) | Plotly + `_content_profile.py` | rendering + rule-based content-type detection (song/speech/film/vlog) | visualization | auto-detection is heuristic; override with `--content-type` |
 
 ### What each vision model is good at
 
