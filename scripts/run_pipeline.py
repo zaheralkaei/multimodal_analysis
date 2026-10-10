@@ -110,6 +110,10 @@ def main() -> int:
                        help="Skip the vision model phase (no API calls, faster but no captions/emotions)")
     parser.add_argument("--skip-phase5", action="store_true",
                        help="Skip the CLAP audio phase (no model download, faster)")
+    # UI audit round 6: content-type drives the dashboard's emphasis + layout
+    parser.add_argument("--content-type", default="auto",
+                        choices=["auto", "song", "speech", "film", "series", "vlog", "other"],
+                        help="Dashboard emphasis (song/speech/film/vlog/...). Default: auto-detect.")
     parser.add_argument("--start-from", type=int, default=0,
                        help="Skip phases before this number (0-8). Useful to resume.")
     args = parser.parse_args()
@@ -147,7 +151,7 @@ def main() -> int:
         (5, "phase5_audio.py"),
         (6, "phase6_music.py"),
         (7, "phase7_sync.py"),
-        (8, "phase8_dashboard.py"),
+        (8, "phase8_dashboard.py" + ("" if args.content_type == "auto" else f" --content-type {args.content_type}")),
     ]
 
     py = sys.executable

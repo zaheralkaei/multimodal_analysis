@@ -128,6 +128,28 @@ The script:
 3. Runs all 8 phases, writing per-video output to `data/<video_id>/`
 4. Builds the dashboard at `reports/<video_id>/dashboard.html`
 
+### Content types (not just music videos)
+
+The same pipeline analyzes song videos, films/episodes, vlogs and political
+speeches. The dashboard auto-detects the content type from the signal mix
+(tempo, talk coverage, lyric density, shot grammar) and adapts: timeline
+tracks with no data are omitted, music-only caveats are hidden for speeches,
+and the detection reasons are shown so you can verify them.
+
+```bash
+python scripts/run_pipeline.py URL --content-type auto    # default
+python scripts/run_pipeline.py URL --content-type speech  # political speech
+python scripts/run_pipeline.py URL --content-type film    # film / episode
+python scripts/run_pipeline.py URL --content-type vlog
+python scripts/run_pipeline.py URL --content-type song    # music video
+python scripts/run_pipeline.py URL --content-type series
+```
+
+Auto-detection is heuristic and explainable — an explicit `--content-type`
+always wins. See `docs/UI_AUDIT.md`. For speeches, `--skip-phase5` (CLAP
+audio tags are music-vocabulary) and phase 6 stay harmless since the
+dashboard simply omits their tracks.
+
 ### Phases
 
 | # | Phase | What | Output |

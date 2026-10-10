@@ -32,11 +32,14 @@ from _paths import disp
 PROCESSED = REPO_ROOT / "data" / "processed"
 if "PROCESSED_DIR" in os.environ:
     PROCESSED = Path(os.environ["PROCESSED_DIR"])
-REPORTS = REPO_ROOT / "reports"
+# Default REPORTS is per-video (UI audit U7): a standalone run with no
+# REPORTS_DIR used to share reports/frames across videos (stale thumbnails).
+REPORTS = REPO_ROOT / "reports" / PROCESSED.name
 if "REPORTS_DIR" in os.environ:
     REPORTS = Path(os.environ["REPORTS_DIR"])
 
 from _clap_tags import MOOD_TAGS
+from _content_profile import CONTENT_TYPES, detect_content_type, explain, profile_line
 
 EMOTION_COLORS = {
     # The 16 canonical emotions (from _normalize_emotion.py) — AUDIT_R4 F5:
@@ -150,6 +153,33 @@ TABLE_JS = """
 """
 
 
+# UI audit U5: click a shot bar on the timeline -> highlight + jump to the
+# table row (runs after Plotly has registered the chart div).
+TIMELINE_JS = """
+<script>
+(function () {
+  var tl = document.getElementById("chart_timeline");
+  var table = document.getElementById("shotTable");
+  if (!tl || !table || typeof tl.on !== "function") return;
+  tl.on("plotly_click", function (d) {
+    try {
+      var p = d.points && d.points[0];
+      var cd = p && p.customdata;
+      if (!cd) return;
+      var idx = Array.isArray(cd) ? cd[0] : (cd.shot_idx !== undefined ? cd.shot_idx : null);
+      if (idx === null || idx === undefined) return;
+      var row = table.querySelector("tr[data-i='" + idx + "']");
+      if (!row) return;
+      row.scrollIntoView({ behavior: "smooth", block: "center" });
+      row.style.background = "#ffe28a";
+      setTimeout(function () { row.style.background = ""; }, 1600);
+    } catch (e) { /* timeline click highlight is best-effort */ }
+  });
+})();
+</script>
+"""
+
+
 def load_csv_rows(path: Path, label: str) -> list:
     """Read a CSV if it exists; warn (not crash) if missing (AUDIT_R4 F6)."""
     if not path.exists():
@@ -161,7 +191,11 @@ def load_csv_rows(path: Path, label: str) -> list:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.parse_args()
+    parser.add_argument("--content-type", default="auto",
+                        choices=list(CONTENT_TYPES),
+                        help="Content type for dashboard emphasis (UI audit round 6). "
+                             "Default: auto-detect from tempo/lyrics/talk-coverage/shots.")
+    args = parser.parse_args()
 
     sync_csv = PROCESSED / "sync_per_shot.csv"
     stats_path = PROCESSED / "sync_stats.json"
@@ -218,25 +252,66 @@ def main() -> int:
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
-    # ===== Chart 1: Synchronized timeline (4 stacked tracks) =====
+
+    # ===== Chart 1: Synchronized timeline =====
+    # Tracks adapt to the data (UI audit round 6): a speech has no CLAP/RMS
+    # rows, a film may have no transcript — a fixed 4-row layout used to
+    # render empty frames for content types the pipeline once assumed away.
+    clap = load_csv_rows(PROCESSED / "audio_clap.csv", "audio_clap.csv")
+    music = load_csv_rows(PROCESSED / "music_features.csv", "music_features.csv")
+    transcript = load_csv_rows(PROCESSED / "transcript.csv", "transcript.csv")
+    beats = music_summary.get("beat_times", [])
+
+    # Content profile (UI audit round 6): type drives emphasis + caveats
+    profile = detect_content_type(
+        shots=shots, music_summary=music_summary, transcript=transcript,
+        video_duration=float(metadata.get("duration_sec", 0) or 0), clap_rows=clap,
+        override=args.content_type)
+    content_type = profile["type"]
+
     starts = [float(s["start_sec"]) for s in shots]
     durations = [float(s["duration_sec"]) for s in shots]
     shot_colors = [color_for_emotion(s.get("vision_emotion", "")) for s in shots]
     emotion_texts = [s.get("vision_emotion", "") for s in shots]
     captions = [s.get("vision_caption", "") for s in shots]
 
+    # Which tracks exist?
+    top_vars = []
+    has_clap_track = len(clap) >= 2
+    if has_clap_track:
+        import statistics
+        tag_var = {tag: statistics.variance([float(r[tag]) for r in clap])
+                   for tag in MOOD_TAGS if tag in clap[0]}
+        top_vars = sorted(tag_var, key=tag_var.get, reverse=True)[:4]
+    has_clap_track = has_clap_track and bool(top_vars)
+    has_music_track = bool(music) or bool(beats)
+    has_lyrics_track = bool(transcript)
+
+    track_titles = ["Shots timeline (color = visual emotion)"]
+    if has_clap_track:
+        track_titles.append("Audio mood (CLAP, 5s windows) — top-4 most variable tags")
+    if has_music_track:
+        track_titles.append("Music energy (RMS per second)" + (" + detected beats" if beats else ""))
+    if has_lyrics_track:
+        track_titles.append("Lyrics / transcripts")
+    n_tracks = len(track_titles)
+
+    heights = {"clap": 0.30, "music": 0.18, "lyrics": 0.18}
+    row_h = []
+    if has_clap_track: row_h.append(heights["clap"])
+    if has_music_track: row_h.append(heights["music"])
+    if has_lyrics_track: row_h.append(heights["lyrics"])
+    row_h = [0.3] + row_h
+    row_sum = sum(row_h)
+    row_h = [h / row_sum for h in row_h]
+
     fig = make_subplots(
-        rows=4, cols=1,
-        subplot_titles=(
-            "Shots timeline (color = visual emotion)",
-            "Audio mood (CLAP, 5s windows) — top-4 most variable tags",
-            "Music energy (RMS per second) + detected beats",
-            "Lyrics / transcripts overlap",
-        ),
-        shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.30, 0.30, 0.20, 0.20],
+        rows=n_tracks, cols=1,
+        subplot_titles=tuple(track_titles),
+        shared_xaxes=True, vertical_spacing=0.06, row_heights=row_h,
     )
 
-    # Row 1: shot bars with emotion color
+    # Row: shot bars with emotion color (+ click data for timeline->table U5)
     fig.add_trace(go.Bar(
         x=durations, y=[1] * len(shots), base=starts,
         marker_color=shot_colors, marker_line_width=0,
@@ -248,7 +323,7 @@ def main() -> int:
         showlegend=False, name="Shots",
     ), row=1, col=1)
 
-    # Add emotion legend (dedup by color, label = first emotion with that color)
+    # Emotion legend (dedup by color, label = first emotion with that color)
     seen_emotions: dict[str, str] = {}
     for emotion in sorted(set(emotion_texts)):
         c = color_for_emotion(emotion)
@@ -259,66 +334,62 @@ def main() -> int:
                 showlegend=True, hoverinfo="skip",
             ), row=1, col=1)
 
-    # Row 2: CLAP mood curves
-    clap = load_csv_rows(PROCESSED / "audio_clap.csv", "audio_clap.csv")
-    top_vars = []
-    if len(clap) >= 2:
-        import statistics
-        tag_var = {tag: statistics.variance([float(r[tag]) for r in clap])
-                   for tag in MOOD_TAGS if tag in clap[0]}
-        top_vars = sorted(tag_var, key=tag_var.get, reverse=True)[:4]
+    row_i = 1
+    if has_clap_track:
+        row_i += 1
         for tag in top_vars:
             xs = [(float(r["start_sec"]) + float(r["end_sec"])) / 2 for r in clap]
             ys = [float(r[tag]) for r in clap]
             fig.add_trace(go.Scatter(
                 x=xs, y=ys, mode="lines", name=tag,
                 hovertemplate=f"<b>{tag}</b><br>%{{x:.1f}}s: %{{y:.2f}}<extra></extra>",
-            ), row=2, col=1)
+            ), row=row_i, col=1)
+        fig.update_yaxes(title_text="CLAP similarity", row=row_i, col=1, range=[0, 1])
 
-    # Row 3: RMS energy + beat ticks
-    music = load_csv_rows(PROCESSED / "music_features.csv", "music_features.csv")
-    if music:
-        xs = [float(r["start_sec"]) for r in music]
-        ys = [float(r["rms_energy"]) for r in music]
-        fig.add_trace(go.Scatter(
-            x=xs, y=ys, mode="lines", line=dict(color="#ff7f0e"),
-            name="RMS energy", showlegend=False,
-            hovertemplate="%{x:.1f}s<br>RMS: %{y:.3f}<extra></extra>",
-        ), row=3, col=1)
-    beats = music_summary.get("beat_times", [])
-    if beats:
-        fig.add_trace(go.Scatter(
-            x=beats, y=[0] * len(beats),
-            mode="markers", marker=dict(symbol="line-ns-open", size=5, color="#aaa"),
-            name="Beats", showlegend=False,
-            hovertemplate="Beat at %{x:.2f}s<extra></extra>",
-        ), row=3, col=1)
+    if has_music_track:
+        row_i += 1
+        if music:
+            xs = [float(r["start_sec"]) for r in music]
+            ys = [float(r["rms_energy"]) for r in music]
+            fig.add_trace(go.Scatter(
+                x=xs, y=ys, mode="lines", line=dict(color="#ff7f0e"),
+                name="RMS energy", showlegend=False,
+                hovertemplate="%{x:.1f}s<br>RMS: %{y:.3f}<extra></extra>",
+            ), row=row_i, col=1)
+        if beats:
+            fig.add_trace(go.Scatter(
+                x=beats, y=[0] * len(beats),
+                mode="markers", marker=dict(symbol="line-ns-open", size=5, color="#aaa"),
+                name="Beats", showlegend=False,
+                hovertemplate="Beat at %{x:.2f}s<extra></extra>",
+            ), row=row_i, col=1)
+        fig.update_yaxes(title_text="RMS", row=row_i, col=1)
 
-    # Row 4: lyrics as colored bars
-    transcript = load_csv_rows(PROCESSED / "transcript.csv", "transcript.csv")
-    for t in transcript:
-        s, e = float(t["start_sec"]), float(t["end_sec"])
-        text = t.get("text", "")
-        fig.add_trace(go.Bar(
-            x=[e - s], y=[1], base=[s],
-            marker_color="#17becf", marker_line_width=0,
-            name="Lyrics", showlegend=False,
-            hovertemplate=f"<b>Lyric</b><br>{s:.1f}-{e:.1f}s<br>{html_lib.escape(text[:60])}<extra></extra>",
-        ), row=4, col=1)
+    if has_lyrics_track:
+        row_i += 1
+        for t in transcript:
+            s, e = float(t["start_sec"]), float(t["end_sec"])
+            text = t.get("text", "")
+            fig.add_trace(go.Bar(
+                x=[e - s], y=[1], base=[s],
+                marker_color="#17becf", marker_line_width=0,
+                name="Lyrics", showlegend=False,
+                hovertemplate=f"<b>Lyric</b><br>{s:.1f}-{e:.1f}s<br>{html_lib.escape(text[:60])}<extra></extra>",
+            ), row=row_i, col=1)
+        fig.update_yaxes(visible=False, row=row_i, col=1)
 
     fig.update_layout(
-        height=1000, width=None,
-        title_text="<b>Multimodal video analysis — synchronized timeline</b>",
+        height=min(1000, 240 + 190 * n_tracks), width=None,
+        title_text=f"<b>{html_lib.escape(video_id)} ({content_type}) — synchronized timeline</b>",
         barmode="overlay",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         template="plotly_white",
     )
-    fig.update_xaxes(title_text="Time (sec)", row=4, col=1)
+    fig.update_xaxes(title_text="Time (sec)", row=n_tracks, col=1)
     fig.update_yaxes(visible=False, row=1, col=1)
-    fig.update_yaxes(title_text="CLAP similarity", row=2, col=1, range=[0, 1])
-    fig.update_yaxes(title_text="RMS", row=3, col=1)
-    fig.update_yaxes(visible=False, row=4, col=1)
-    timeline_html = fig.to_html(include_plotlyjs="cdn", full_html=False, div_id="chart_timeline")
+    # UI audit U6: embed Plotly inline so the dashboard is fully self-contained
+    # (offline / file:// no longer blanked half the page)
+    timeline_html = fig.to_html(include_plotlyjs="inline", full_html=False, div_id="chart_timeline")
 
     # ===== Chart 2: Emotion distribution =====
     emotion_counts = Counter(e or "(none)" for e in emotion_texts)
@@ -521,7 +592,7 @@ def main() -> int:
   <label style="font-size:12px;"><input type="checkbox" id="tblBeat" style="margin-right:4px;">only cuts on beat</label>
   <span id="tblCount" style="font-size:11px;color:#666;"></span>
 </div>"""
-    table_html += table_controls_html + TABLE_JS
+    table_html += table_controls_html + TABLE_JS + TIMELINE_JS
 
     # ===== Honest findings =====
     findings = []
@@ -532,9 +603,20 @@ def main() -> int:
         findings.append(f"<li>Shot duration: avg <b>{shot_stats.get('avg_shot_duration_sec', '?'):.1f}s</b>, "
                        f"min <b>{shot_stats.get('min_shot_duration_sec', '?'):.1f}s</b>, "
                        f"max <b>{shot_stats.get('max_shot_duration_sec', '?'):.1f}s</b>.</li>")
-    if stats.get("cuts_on_beat") is not None and n_shots > 0:
+    has_music_sig = bool(music_summary.get("tempo_bpm")) and bool(music_summary.get("n_beats"))
+    if stats.get("cuts_on_beat") is not None and n_shots > 0 and has_music_sig:
         findings.append(f"<li><b>{stats['cuts_on_beat']}/{stats['total_shots']} cuts</b> on a beat "
                        f"({stats['cuts_on_beat_pct']}%) — within 100ms tolerance.</li>")
+    if content_type in ("speech", "vlog") and transcript:
+        talk_chars = sum(len(t.get("text", "")) for t in transcript)
+        talk_dur = sum(max(0.0, float(t["end_sec"]) - float(t["start_sec"])) for t in transcript)
+        dur_all = max(1.0, float(metadata.get("duration_sec", 0) or 0))
+        findings.append(f"<li><b>{len(transcript)} transcript segments</b>, ~{talk_chars / dur_all * 60:.0f} chars/min, "
+                       f"talk occupies {min(100, talk_dur / dur_all * 100):.0f}% of the video.</li>")
+    how_set = ("explicitly set with --content-type" if profile.get("confidence") is None
+               else f"auto-detected (confidence {profile.get('confidence', '?')})")
+    findings.append(f"<li>Content type: <b>{content_type}</b> ({how_set}). "
+                    f"{html_lib.escape(explain(profile))}.</li>")
     if stats.get("shots_with_lyrics"):
         findings.append(f"<li><b>{stats['shots_with_lyrics']}/{stats['total_shots']} shots</b> contain spoken/sung lyrics "
                        f"({stats['shots_with_lyrics_pct']}%).</li>")
@@ -569,19 +651,35 @@ def main() -> int:
     dq_html += "</table>"
 
     # ===== Methodology caveat =====
-    caveats = f"""
-    <ul>
-      <li><b>Visual analysis</b> uses <code>{safe_model}</code>. The model "sees" one mid-frame per shot and answers 8 questions. Quality depends on the chosen mid-frame.</li>
-      <li><b>Shot detection</b> uses PySceneDetect's ContentDetector (HSV color delta + edge detection). Detects both hard cuts and gradual transitions. False positives possible in compression artifacts.</li>
-      <li><b>Camera motion</b> is computed via OpenCV optical flow between consecutive frames within each shot (at {extracted_fps} fps → {round(1 / extracted_fps, 2) if isinstance(extracted_fps, (int, float)) and extracted_fps else '?'}s time resolution). Coarser than a human labeler but consistent. At lower fps, the optical flow algorithm tends to over-classify zoom-in because frames 1s+ apart often have apparent radial divergence.</li>
-      <li><b>Transcription</b> uses faster-whisper. Trained on speech, not music. On heavily reverbed or whispered vocals, expect gaps or mistakes.</li>
-      <li><b>CLAP similarity</b>: 0-1 probability per tag. High score = audio is <i>similar to</i> the tag, not that it <i>is</i> the tag.</li>
-      <li><b>"Cut on beat"</b>: shot start is within ±100ms of a detected beat. {stats.get('cuts_on_beat_pct', 0)}% for this video; compare across videos for genre-level patterns.</li>
-      <li><b>Key detection</b> uses Krumhansl-Schmuckler template matching on chroma. Works for most popular music; fails on atonal tracks.</li>
-    </ul>
-    """
+    # Caveats follow the content profile (UI audit round 6): music-specific
+    # items (CLAP / cut-on-beat / key) only when a music signal exists.
+    caveat_lines = [
+        f"<li><b>Visual analysis</b> uses <code>{safe_model}</code>. The model \"sees\" one mid-frame per shot and answers 8 questions. Quality depends on the chosen mid-frame.</li>",
+        "<li><b>Shot detection</b> uses PySceneDetect's ContentDetector (HSV color delta + edge detection). Detects both hard cuts and gradual transitions. False positives possible in compression artifacts.</li>",
+        f"<li><b>Camera motion</b> is computed via OpenCV optical flow between consecutive frames within each shot (at {extracted_fps} fps → {round(1 / extracted_fps, 2) if isinstance(extracted_fps, (int, float)) and extracted_fps else '?'}s time resolution). Coarser than a human labeler but consistent. At lower fps, the optical flow algorithm tends to over-classify zoom-in because frames 1s+ apart often have apparent radial divergence.</li>",
+        f"<li><b>Content type: {content_type}</b> ({'explicitly set' if profile.get('confidence') is None else 'auto-detected'}). Rules are ordered and heuristic; a wrong auto-detection here is visible in its reasons, and can be overridden with <code>--content-type</code>.</li>",
+    ]
+    if transcript:
+        caveat_lines.append("<li><b>Transcription</b> uses faster-whisper. Trained on speech, not music. On heavily reverbed or whispered vocals, expect gaps or mistakes.</li>")
+    if clap:
+        caveat_lines.append("<li><b>CLAP similarity</b>: 0-1 probability per tag. High score = audio is <i>similar to</i> the tag, not that it <i>is</i> the tag.</li>")
+    if has_music_sig:
+        caveat_lines.append(f"<li><b>\"Cut on beat\"</b>: shot start is within ±100ms of a detected beat. {stats.get('cuts_on_beat_pct', 0)}% for this video; compare across videos for genre-level patterns.</li>")
+        caveat_lines.append("<li><b>Key detection</b> uses Krumhansl-Schmuckler template matching on chroma. Works for most popular music; fails on atonal tracks.</li>")
+    caveats = "<ul>" + "".join(caveat_lines) + "</ul>"
 
     # ===== Build full HTML =====
+    # Dynamic timeline description — matches the tracks actually drawn
+    timeline_tracks = [f"<b>Shots</b> = bars colored by visual emotion (from {safe_model} captions), positioned at each shot's start time; click a shot bar to jump to its table row"]
+    if has_clap_track:
+        timeline_tracks.append("<b>Audio mood</b> = top-4 CLAP tags by variance, plotted as curves over the 5s windows")
+    if has_music_track:
+        timeline_tracks.append("<b>Energy + beats</b> = librosa RMS per second + beat tracker ticks")
+    if has_lyrics_track:
+        timeline_tracks.append("<b>Lyrics</b> = faster-whisper segments")
+    timeline_method_line = (f"<b>Method:</b> {n_tracks} track{'s' if n_tracks != 1 else ''} sharing the x-axis "
+                            f"(adapted to this {content_type}: tracks with no data are omitted). "
+                            + " ".join(timeline_tracks) + ".")
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     full_html = f"""<!doctype html>
 <html lang="en">
@@ -611,6 +709,8 @@ def main() -> int:
   <b>Video:</b> {html_lib.escape(video_id)}
   {f'<a href="{html_lib.escape(source_url)}" target="_blank" rel="noopener">&#9654; open source video</a>' if source_url else ''}
   &middot; duration ~{total_sec:.0f}s &middot; {n_shots} shots &middot; generated {generated_at}
+  <br><b>Content type:</b> {content_type}
+  ({'you set --content-type' if profile.get('confidence') is None else 'auto-detected from tempo / talk coverage / shot grammar'})
   <br><b>Frame extraction:</b> {n_frames_extracted} frames at <b>{extracted_fps} fps</b>
   (video native: {round(float(video_fps), 1) if video_fps != '?' else '?'} fps).
   Camera motion classification depends on this rate — at 2 fps we get 0.5s
@@ -632,7 +732,7 @@ def main() -> int:
 </div>
 
 <h2>1. Synchronized timeline</h2>
-<p class="section-subtitle"><b>Method:</b> 4 stacked tracks sharing the x-axis. <b>Shots</b> = bars colored by visual emotion (from {safe_model} captions), positioned at each shot's start time. <b>Audio mood</b> = top-4 CLAP tags by variance, plotted as curves over the 5s windows. <b>Energy + beats</b> = librosa RMS per second + beat tracker ticks. <b>Lyrics</b> = faster-whisper segments.</p>
+<p class="section-subtitle">{timeline_method_line}</p>
 {timeline_html}
 
 <h2>2. Per-modality breakdowns</h2>

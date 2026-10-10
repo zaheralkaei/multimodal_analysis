@@ -52,3 +52,21 @@ U1–U4 fixed in `phase8_dashboard.py` (video ID in title/banner, youtu.be deep
 links — sourced from `metadata.json['source_url']` written by phase 0, new table
 columns incl. cut-on-beat badge and camera-score tooltips, client-side
 sort/filter/search). U5–U10 deferred.
+
+## Round-6 status (content-type generalization)
+
+The pipeline + dashboard are no longer "music video only": the same 8 phases
+apply to songs, films/episodes, vlogs and speeches, and the dashboard adapts.
+
+| Finding | Status | Where |
+|---|---|---|
+| U5 (timeline↔table linkage) | ✅ fixed — clicking a shot bar scrolls to and flashes its table row (plotly_click → best-effort JS) | `phase8_dashboard.py` |
+| U6 (offline blank page) | ✅ fixed — Plotly now embedded inline (fully self-contained ~5 MB, zero external script tags) | `phase8_dashboard.py` |
+| U7 (shared frames dir) | ✅ fixed — default REPORTS is per-video (`reports/<video_id>/`) when REPORTS_DIR is unset | `phase8_dashboard.py` |
+| content generalization | ✅ new — `scripts/_content_profile.py` auto-detects song / speech / film / series / vlog / other from tempo, talk coverage, lyric density and shot grammar (ordered explainable rules; reasons rendered in the dashboard) | `_content_profile.py`, `phase8_dashboard.py`, `run_pipeline.py --content-type` |
+| U8–U10 | open (legend merge, dark mode/a11y, collapsible tracks) | — |
+
+Adaptive behavior: the timeline draws only tracks that have data (a speech has
+no CLAP/RMS tracks); music-only caveats (CLAP similarity, cut-on-beat, key
+detection) are suppressed when no music signal exists; speech/vlog get a
+talk-coverage finding; the banner shows type + detection rationale.
