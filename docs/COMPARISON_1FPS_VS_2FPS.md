@@ -1,5 +1,13 @@
 # 1 fps vs 2 fps — detailed comparison
 
+> **⚠️ Invalidated by round-4 audit (see AUDIT_R4.md):** at the time these numbers
+> were produced, phase 1 and phase 3 mapped seconds → frame files assuming 1 fps.
+> The 1 fps runs therefore accidentally matched that broken formula ("more
+> correct"), while the 2 fps runs analyzed footage from ~half the timestamp. The
+> differences measured below are confounded by that bug, not a pure sampling-rate
+> effect. The formula is fixed now (`mid_frame_index` / `shot_frame_range`, both
+> fps-aware); regenerate this comparison if the sampling-rate question matters.
+
 This document records the actual numerical differences between running the
 pipeline at 1 fps and 2 fps on Tyla's *SHE DID IT AGAIN* (3:35, 5163
 frames at 24 fps native).

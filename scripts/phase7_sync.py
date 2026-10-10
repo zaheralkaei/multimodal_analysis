@@ -2,17 +2,18 @@
 Phase 7 — Temporal synchronization + cross-modal analysis.
 
 Reads:
-  data/processed/shots.json (Phase 1)
-  data/processed/shot_vision.csv (Phase 2)
-  data/processed/shot_camera.csv (Phase 3)
-  data/processed/transcript.csv (Phase 4)
-  data/processed/audio_clap.csv (Phase 5)
-  data/processed/music_features.csv (Phase 6)
-  data/processed/music_summary.json (Phase 6)
+  data/<video_id>/shots.json (Phase 1)
+  data/<video_id>/shot_vision.csv (Phase 2)
+  data/<video_id>/shot_vision_stats.json (Phase 2 — model/provider provenance)
+  data/<video_id>/shot_camera.csv (Phase 3)
+  data/<video_id>/transcript.csv (Phase 4)
+  data/<video_id>/audio_clap.csv (Phase 5)
+  data/<video_id>/music_features.csv (Phase 6)
+  data/<video_id>/music_summary.json (Phase 6)
 
 Writes:
-  data/processed/sync_per_shot.csv — joined table per shot
-  data/processed/sync_stats.json — derived cross-modal signals
+  data/<video_id>/sync_per_shot.csv — joined table per shot
+  data/<video_id>/sync_stats.json — derived cross-modal signals + vision model
 
 Cross-modal signals computed:
   - cut_on_beat: did this shot's start coincide with a beat (within 100ms)?
@@ -26,6 +27,7 @@ import argparse, csv, json, os, sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+from _paths import disp
 PROCESSED = REPO_ROOT / "data" / "processed"
 if "PROCESSED_DIR" in os.environ:
     PROCESSED = Path(os.environ["PROCESSED_DIR"])
@@ -36,6 +38,7 @@ def load_csv(path: Path) -> list[dict]:
         return []
     with path.open(encoding="utf-8") as f:
         return list(csv.DictReader(f))
+
 
 
 def within_tolerance(a: float, b: float, tol: float) -> bool:
@@ -161,31 +164,35 @@ def main() -> int:
           f"transcript: {len(transcript)}, clap: {len(clap)}, music: {len(music)}, "
           f"beats: {len(beats)}")
 
-    # Mood tag list (must match phase5)
-    mood_tags = [
-        "happy and bright", "sad and melancholic", "aggressive and intense",
-        "romantic and tender", "triumphant and epic", "calm and peaceful",
-        "tense and anxious", "dreamy and ethereal", "dark and ominous",
-        "playful and whimsical", "lonely and introspective", "powerful and confident",
-    ]
+    # Mood tag list from the shared vocabulary module (round-4 audit fix:
+    # was hand-copied here and could drift from phase 5's list)
+    from _clap_tags import MOOD_TAGS
 
-    rows, stats = join_data(shots, vision, camera, transcript, clap, music, beats, mood_tags)
+    rows, stats = join_data(shots, vision, camera, transcript, clap, music, beats, MOOD_TAGS)
 
-    # Write per-shot CSV
+    # Vision model provenance (AUDIT_R4 F4) — phase 8 renders what actually ran
+    vision_stats_path = PROCESSED / "shot_vision_stats.json"
+    if vision_stats_path.exists():
+        vstats = json.loads(vision_stats_path.read_text(encoding="utf-8"))
+        stats["vision_model"] = f"{vstats.get('model', '?')}"
+        stats["vision_provider"] = vstats.get("provider", "?")
+        stats["vision_endpoint"] = vstats.get("endpoint", "?")
+
+    # Write per-shot CSV — ALWAYS, so a stale sync CSV from a previous video
+    # can't survive an empty run (round-4 audit low-severity fix)
     out_csv = PROCESSED / "sync_per_shot.csv"
-    if rows:
-        cols = list(rows[0].keys())
-        with out_csv.open("w", encoding="utf-8", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=cols)
-            w.writeheader()
-            for r in rows:
-                w.writerow(r)
-    print(f"[ok] wrote {out_csv.relative_to(REPO_ROOT)} ({len(rows)} rows)")
+    cols = list(rows[0].keys()) if rows else ["shot_idx"]
+    with out_csv.open("w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=cols)
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
+    print(f"[ok] wrote {disp(out_csv)} ({len(rows)} rows)")
 
     # Write stats
     out_json = PROCESSED / "sync_stats.json"
     out_json.write_text(json.dumps(stats, indent=2) + "\n", encoding="utf-8")
-    print(f"[ok] wrote {out_json.relative_to(REPO_ROOT)}")
+    print(f"[ok] wrote {disp(out_json)}")
 
     print(f"\n[stats]")
     print(f"  {stats['cuts_on_beat']}/{stats['total_shots']} shots cut on a beat ({stats['cuts_on_beat_pct']}%)")

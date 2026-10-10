@@ -26,7 +26,7 @@ choco install ffmpeg   # Windows; or use your package manager
 
 # 2. Configure (cloud vision model)
 cp .env.example .env
-# Edit .env: paste your OLLAMA_API_KEY from https://ollama.com/settings/keys
+# Edit .env: paste your OPENROUTER_API_KEY from https://openrouter.ai/keys
 
 # 3. Run on any YouTube video
 python scripts/run_pipeline.py "https://www.youtube.com/watch?v=rtwpk9rb1Dc"
@@ -35,7 +35,7 @@ python scripts/run_pipeline.py "https://www.youtube.com/watch?v=rtwpk9rb1Dc"
 # reports/<video_id>/dashboard.html
 ```
 
-The first run takes ~15-25 minutes (mostly the Gemini API calls + CLAP model
+The first run takes ~15-25 minutes (mostly the vision API calls + CLAP model
 download). Subsequent runs on the same video resume in seconds.
 
 ---
@@ -86,24 +86,24 @@ Verify with `ffmpeg -version`.
 
 ### Configuration (.env)
 
-The vision model is **Gemini 3 Flash** running on **Ollama Cloud** (not local).
-This is faster and free for our usage volume.
+The vision model is **google/gemma-4-31b-it** running on **OpenRouter**
+(OpenAI-compatible, multimodal: text + image in, text out).
 
-1. Get an API key at https://ollama.com/settings/keys
+1. Get an API key at https://openrouter.ai/keys
 2. Copy the template: `cp .env.example .env`
 3. Edit `.env`:
    ```
-   OLLAMA_API_KEY=ollama_xxxxxxxxxxxxxxxxxxxxxxxxxxxx
-   OLLAMA_BASE_URL=https://ollama.com/api
-   VISION_MODEL=gemini-3-flash-preview
+   OPENROUTER_API_KEY=sk-or-xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+   VISION_MODEL=google/gemma-4-31b-it
    ```
 4. `.env` is gitignored — never commit your key
 
-For local vision (no API key, slower on CPU):
-```
-OLLAMA_BASE_URL=http://localhost:11434
-VISION_MODEL=gemma3:4b   # smaller, English-friendly
-```
+Pricing: ~$0.09/M input + $0.34/M output tokens; a rate-limited
+`google/gemma-4-31b-it:free` variant also exists.
+
+For local Ollama instead (no OpenRouter key), set `OLLAMA_BASE_URL=http://localhost:11434`
+and no `OPENROUTER_API_KEY`; phase 2 auto-falls back to Ollama, or force it with
+`python scripts/run_pipeline.py URL --provider ollama`.
 
 ---
 
@@ -134,7 +134,7 @@ The script:
 |---|---|---|---|
 | 0 | Input prep | Download video, extract frames + audio | `frames/`, `audio.wav`, `metadata.json` |
 | 1 | Shot detection | PySceneDetect ContentDetector | `shots.json`, `shot_predictions.csv` |
-| 2 | Vision | Gemini 3 Flash via Ollama Cloud (JSON-mode prompt) | `shot_vision.csv` |
+| 2 | Vision | google/gemma-4-31b-it via OpenRouter (JSON-mode prompt) | `shot_vision.csv` |
 | 3 | Camera motion | OpenCV Farneback optical flow | `shot_camera.csv` |
 | 4 | Transcription | faster-whisper (multilingual) | `transcript.json`, `transcript.csv` |
 | 5 | Audio tagging | CLAP (laion/clap-htsat-fused) | `audio_clap.csv` |
@@ -166,7 +166,7 @@ export PROCESSED_DIR="data/rtwpk9rb1Dc"
 export REPORTS_DIR="reports/rtwpk9rb1Dc"
 
 python scripts/phase1_shots.py --threshold 35 --min-scene-len 30
-python scripts/phase2_vision.py --model gemini-3-flash-preview
+python scripts/phase2_vision.py --model google/gemma-4-31b-it
 python scripts/phase8_dashboard.py
 ```
 
@@ -238,7 +238,7 @@ multimodal_analysis/
 | Phase | Model | What it analyzes | Capabilities | Limits |
 |---|---|---|---|---|
 | 1 (shots) | PySceneDetect ContentDetector | Visual scene changes | BSD-3-Clause, ~5K⭐, 5 detector algorithms | Reads video directly, no frame-rate dep |
-| 2 (vision) | **Gemini 3 Flash** via Ollama Cloud | Per-shot caption, camera, emotion, colors, entities, location, lighting, composition | 1-2s per call, JSON-mode, free tier ~10K calls/day | Single mid-frame per shot (can't see motion) |
+| 2 (vision) | **google/gemma-4-31b-it** via OpenRouter | Per-shot caption, camera, emotion, colors, entities, location, lighting, composition | 1-2s per call, JSON-mode, free tier ~10K calls/day | Single mid-frame per shot (can't see motion) |
 | 3 (camera) | OpenCV Farneback optical flow | Camera motion (pan/tilt/zoom/static) | Local, free, no API | 8 discrete classes (no magnitude) |
 | 4 (transcription) | **faster-whisper small** (multilingual) | Spoken/sung words | 99 languages, ~5MB model | Hallucinates on silence/music |
 | 5 (audio) | **CLAP** (laion/clap-htsat-fused) | 27 audio tags (mood, section, instrument) | 48kHz, 27 predefined tags | Vocabulary locked at design time |
@@ -248,18 +248,17 @@ multimodal_analysis/
 
 ### What each vision model is good at
 
-**Gemini 3 Flash** is the default because:
-- 1-2s per call (vs 30s+ for gemma3:4b locally)
-- Free tier at ollama.com
-- Good at structured JSON output
-- ~10K calls/day limit on free tier
+**google/gemma-4-31b-it** (via OpenRouter) is the default because:
+- Dense multimodal open-weights model (text + image in, text out), Apache 2.0
+- ~256K context; strong at structured JSON output
+- Cheap: ~$0.09/M input + $0.34/M output tokens
+- `google/gemma-4-31b-it:free` — rate-limited free variant, good for evaluation
 
-For **local-only** use:
+For **local-only** use (Ollama, no API key):
 - `gemma3:4b` — small, English-friendly, ~3GB RAM
 - `gemma3:27b` — much better, needs ~16GB RAM
-- `gemma4:31b` — best open, needs 24GB+ RAM
 
-For **other clouds**:
+For **other clouds** (any OpenAI-compatible vision endpoint):
 - `gpt-4o-mini` — pay-per-call, fastest in benchmarks
 - `claude-3.5-sonnet` — most accurate on nuanced prompts
 - `qwen2.5-vl-72b` — best open multimodal (Ollama cloud, not local)
@@ -301,7 +300,7 @@ pip install scenedetect[opencv]
 ```
 
 ### "Health check failed: model didn't respond"
-- **Cloud**: check `OLLAMA_API_KEY` in `.env`, verify at https://ollama.com/settings/keys
+- **Cloud**: check `OPENROUTER_API_KEY` in `.env` and the model slug (https://openrouter.ai/openrouter/gemma-4-31b-it)
 - **Local**: is ollama running? `ollama serve` in another terminal, then `ollama pull gemma3:4b`
 
 ### "shot_vision.csv has truncated captions"

@@ -1,70 +1,37 @@
 """
 Phase 5 — Audio tagging with CLAP (via transformers).
 
-Reads:  data/processed/audio.wav (from Phase 0)
-Writes: data/processed/audio_clap.csv — per-window CLAP similarity scores
-        data/processed/audio_clap.json — same as JSON
+Reads:  data/<video_id>/audio.wav (from Phase 0)
+Writes: data/<video_id>/audio_clap.csv — per-window CLAP similarity scores
+        data/<video_id>/audio_clap.json — same as JSON
 
 Uses laion/clap-htsat-fused via transformers (no separate CLAP install needed).
 
 For each 5-second audio window, compute similarity against a fixed vocabulary
-of mood / section / instrument tags. Output is a per-time feature matrix
-you can correlate with visual analysis.
+of mood / section / instrument tags (from _clap_tags.py, shared with phases
+7 and 8). Output is a per-time feature matrix you can correlate with visual
+analysis.
 """
 from __future__ import annotations
+from _clap_tags import ALL_TAGS, MOOD_TAGS, SECTION_TAGS, INSTRUMENT_TAGS
+
 import argparse, json, os, sys, time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+from _paths import disp
 PROCESSED = REPO_ROOT / "data" / "processed"
 if "PROCESSED_DIR" in os.environ:
     PROCESSED = Path(os.environ["PROCESSED_DIR"])
 
 
-# Fixed vocabulary — chosen for music-video analysis.
-MOOD_TAGS = [
-    "happy and bright",
-    "sad and melancholic",
-    "aggressive and intense",
-    "romantic and tender",
-    "triumphant and epic",
-    "calm and peaceful",
-    "tense and anxious",
-    "dreamy and ethereal",
-    "dark and ominous",
-    "playful and whimsical",
-    "lonely and introspective",
-    "powerful and confident",
-]
-SECTION_TAGS = [
-    "intro",
-    "verse",
-    "chorus",
-    "bridge",
-    "outro",
-    "instrumental break",
-    "vocal only",
-]
-INSTRUMENT_TAGS = [
-    "acoustic guitar",
-    "electric guitar",
-    "piano",
-    "drums and percussion",
-    "bass guitar",
-    "synthesizer",
-    "strings orchestra",
-    "vocal only no instruments",
-]
-ALL_TAGS = MOOD_TAGS + SECTION_TAGS + INSTRUMENT_TAGS
-
-
-def load_clap():
-    """Load CLAP model + processor from HuggingFace."""
+def load_clap(device: str = "cpu"):
+    """Load CLAP model + processor from HuggingFace on the given device."""
     from transformers import ClapModel, ClapProcessor
     model_name = "laion/clap-htsat-fused"
-    print(f"[info] loading {model_name} ...")
+    print(f"[info] loading {model_name} on {device} ...")
     processor = ClapProcessor.from_pretrained(model_name)
-    model = ClapModel.from_pretrained(model_name)
+    model = ClapModel.from_pretrained(model_name).to(device)
     model.eval()
     return model, processor
 
@@ -118,7 +85,7 @@ def main() -> int:
         print(f"[error] audio not found at {audio_path}")
         return 1
 
-    model, processor = load_clap()
+    model, processor = load_clap(device=args.device)
 
     import csv
     out_csv = PROCESSED / "audio_clap.csv"
@@ -148,7 +115,7 @@ def main() -> int:
         w.writeheader()
         for row in rows:
             w.writerow(row)
-    print(f"\n[ok] wrote {out_csv.relative_to(REPO_ROOT)} ({len(rows)} windows × {len(ALL_TAGS)} tags)")
+    print(f"\n[ok] wrote {disp(out_csv)} ({len(rows)} windows × {len(ALL_TAGS)} tags)")
     print(f"[stats] {elapsed:.0f}s total ({elapsed/max(1,len(rows)):.1f}s/window)")
 
     out_json.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")

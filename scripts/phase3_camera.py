@@ -1,25 +1,60 @@
 """
 Phase 3 — Camera movement classification via optical flow.
 
-Reads:  data/processed/frames/frame_*.jpg (from Phase 0)
-        data/processed/shots.json (from Phase 1)
-Writes: data/processed/shot_camera.csv — per-shot camera movement classification
+Reads:  data/<video_id>/frames/frame_*.jpg (from Phase 0)
+        data/<video_id>/shots.json (from Phase 1)
+        data/<video_id>/metadata.json — for the frame extraction rate (frame_fps)
+Writes: data/<video_id>/shot_camera.csv — per-shot camera movement classification
 
 Uses OpenCV's calcOpticalFlowFarneback between consecutive frames within each
 shot, then classifies the motion field as: static / pan / tilt / zoom / handheld.
 
 This is faster and more reliable than asking a vision-language model "is this
 a pan?" for every shot.
+
+Shot spans in shots.json are SECONDS; they are mapped to extracted-frame file
+numbers with the extraction rate from metadata.json (frame_fps). Assuming
+"file number == seconds" only holds at 1 fps and misclassifies wrong footage
+otherwise — round-4 audit fix (AUDIT_R4 F1b).
 """
 from __future__ import annotations
-import argparse, csv, json, os, sys
+import argparse, csv, json, math, os, sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+from _paths import disp
 PROCESSED = REPO_ROOT / "data" / "processed"
 if "PROCESSED_DIR" in os.environ:
     PROCESSED = Path(os.environ["PROCESSED_DIR"])
 FRAMES_DIR = PROCESSED / "frames"
+
+
+def shot_frame_range(start_sec: float, end_sec: float, fps: int) -> tuple[int, int]:
+    """Inclusive range of 1-indexed extracted-frame files covering the shot.
+
+    Frame N (1-indexed) samples t = (N-1)/fps. We want every frame whose
+    timestamp t satisfies start_sec - 1/fps <= t < end_sec:
+      first = floor(start_sec * fps) + 1   (t <= start_sec)
+      last  = ceil(end_sec * fps)          (t = (last-1)/fps < end_sec)
+    The last frame's timestamp can be slightly before start_sec for ultra-short
+    shots; we then guarantee at least one frame.
+    """
+    first = int(math.floor(start_sec * fps)) + 1
+    last = int(math.ceil(end_sec * fps))
+    if last < first:
+        last = first
+    return first, last
+
+
+def get_extraction_fps() -> int:
+    """Read the frame extraction rate from phase-0 metadata.json (audit F1b)."""
+    meta_path = PROCESSED / "metadata.json"
+    if not meta_path.exists():
+        print(f"[error] metadata.json not found at {meta_path}")
+        print("  run phase 0 first: python scripts/phase0_input.py <source>")
+        sys.exit(1)
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    return int(meta.get("frame_fps") or 1)
 
 
 def optical_flow_between(img1, img2):
@@ -117,19 +152,18 @@ def classify_motion(flow) -> dict:
     }
 
 
-def analyze_shots(shots: list[dict], frames_dir: Path) -> list[dict]:
+def analyze_shots(shots: list[dict], frames_dir: Path, fps: int) -> list[dict]:
     """For each shot, compute optical flow between consecutive frames."""
     import cv2
     import numpy as np
 
     rows = []
     for i, shot in enumerate(shots):
-        # Find frame files for this shot
-        # Shot's start_sec and end_sec correspond to frame indices at 1 fps
-        start_frame = int(shot["start_sec"]) + 1  # 1-indexed filenames
-        end_frame = int(shot["end_sec"]) + 1
+        # Frame files for this shot, via the EXTRACTION rate (AUDIT_R4 F1b;
+        # old code mapped seconds 1:1 to file numbers, i.e. assumed 1 fps)
+        start_f, end_f = shot_frame_range(float(shot["start_sec"]), float(shot["end_sec"]), fps)
         frame_paths = []
-        for fi in range(start_frame, end_frame + 1):
+        for fi in range(start_f, end_f + 1):
             p = frames_dir / f"frame_{fi:05d}.jpg"
             if p.exists():
                 frame_paths.append(p)
@@ -195,7 +229,10 @@ def main() -> int:
     shots = json.loads(shots_path.read_text(encoding="utf-8"))
     print(f"[info] loaded {len(shots)} shots")
 
-    rows = analyze_shots(shots, FRAMES_DIR)
+    fps = get_extraction_fps()
+    print(f"[info] frame extraction rate: {fps} fps (from metadata.json)")
+
+    rows = analyze_shots(shots, FRAMES_DIR, fps)
 
     out_csv = PROCESSED / "shot_camera.csv"
     cols = ["shot_idx", "start_sec", "end_sec", "duration_sec", "n_frames",
@@ -209,10 +246,10 @@ def main() -> int:
 
     from collections import Counter
     counts = Counter(r["camera_motion"] for r in rows)
-    print(f"\n[ok] wrote {out_csv.relative_to(REPO_ROOT)} ({len(rows)} rows)")
+    print(f"\n[ok] wrote {disp(out_csv)} ({len(rows)} rows)")
     print(f"[stats] camera motion distribution:")
     for direction, count in counts.most_common():
-        print(f"   {direction:<14} {count:>4} shots ({count/len(rows)*100:>5.1f}%)")
+        print(f"   {direction:<14} {count:>4} shots ({count/max(1, len(rows))*100:>5.1f}%)")
 
     print(f"\n[next] Phase 4: python scripts/phase4_transcribe.py")
     return 0

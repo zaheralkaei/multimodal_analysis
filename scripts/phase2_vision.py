@@ -1,33 +1,41 @@
 """
 Phase 2 — Per-shot visual analysis with a vision-language model.
 
-Reads:  data/processed/shots.json (from Phase 1)
-        data/processed/frames/frame_*.jpg (from Phase 0)
-Writes: data/processed/shot_vision.csv — one row per shot with 8 Q&A columns
+Reads:  data/<video_id>/shots.json (from Phase 1)
+        data/<video_id>/frames/frame_*.jpg (from Phase 0)
+Writes: data/<video_id>/shot_vision.csv — one row per shot with 8 Q&A columns
+        data/<video_id>/shot_vision_stats.json — provider/model/metrics
 
-Uses Ollama for vision-language inference. Supports both:
-  - Local ollama (http://localhost:11434) — works offline, model must fit in RAM
-  - Ollama cloud (https://ollama.com/api) — needs OLLAMA_API_KEY in .env
+Model backends (round-4 audit):
+  - OpenRouter (default): OpenAI-compatible /v1/chat/completions.
+    Needs OPENROUTER_API_KEY in .env. Default model: google/gemma-4-31b-it.
+  - Ollama: /api/generate against localhost:11434 or Ollama cloud
+    (OLLAMA_BASE_URL + OLLAMA_API_KEY). Kept as a fallback.
 
-Round-2 fixes (vs round 1):
-  - Single combined JSON-mode prompt per shot (was 8 separate prompts).
-    8× fewer API calls, ~8× faster.
-  - num_predict raised to 1500 (was 300) so captions complete mid-sentence.
-  - stop tokens added so model doesn't ramble past the JSON.
-  - JSON parse with markdown-fence stripping and field validation.
+The provider is chosen by --provider:
+  auto  → OpenRouter if OPENROUTER_API_KEY is set, else Ollama
+  openrouter | ollama → force that backend
 
-Each question is asked at temperature=0 and seed=42 for reproducibility.
+Round-2 design (kept): single combined JSON-mode prompt per shot (8 questions
+in one call), temperature=0, seed=42, stop tokens, markdown-fence stripping.
+
+Round-4 fixes:
+  - The model/provider actually used is written to shot_vision_stats.json so
+    later phases (7/8) can report it instead of hardcoding a name (AUDIT_R4 F4).
+  - Resume re-analyzes a shot when its mid-frame changed (e.g. after an fps
+    fix in phase 1) instead of silently keeping stale analysis.
 """
 from __future__ import annotations
-import argparse, base64, csv, json, os, sys, time
+import argparse, base64, csv, datetime, json, os, sys, time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+from _paths import disp
 PROCESSED = REPO_ROOT / "data" / "processed"
 if "PROCESSED_DIR" in os.environ:
     PROCESSED = Path(os.environ["PROCESSED_DIR"])
 
-# Load .env for OLLAMA_API_KEY, OLLAMA_BASE_URL, etc.
+# Load .env for API keys (OPENROUTER_API_KEY, OLLAMA_API_KEY, etc.)
 sys.path.insert(0, str(Path(__file__).parent))
 try:
     from _env import load_env
@@ -69,57 +77,7 @@ JSON_INSTRUCTION = """Respond with ONLY a JSON object in this exact schema:
 }
 Do not add any text before or after the JSON. No markdown code fences."""
 
-
-def get_endpoint() -> tuple[str, dict]:
-    """Return (url, headers) for the ollama endpoint."""
-    base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
-    if base.endswith("/api"):
-        url = f"{base}/generate"
-    else:
-        url = f"{base}/api/generate"
-    headers = {"Content-Type": "application/json"}
-    if "ollama.com" in base:
-        api_key = os.environ.get("OLLAMA_API_KEY", "")
-        if not api_key:
-            raise ValueError("OLLAMA_BASE_URL points to ollama.com but OLLAMA_API_KEY is not set")
-        headers["Authorization"] = f"Bearer {api_key}"
-    return url, headers
-
-
-def call_ollama(model: str, prompt: str, image_b64: str, timeout: int = 120,
-                seed: int = 42, num_predict: int = 1500) -> tuple[str, float]:
-    """Call ollama /api/generate. Returns (response_text, latency_seconds).
-
-    num_predict=1500 (was 300) so JSON responses complete.
-    Stop tokens prevent rambling past the answer.
-    """
-    import urllib.request
-    url, headers = get_endpoint()
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "images": [image_b64],
-        "stream": False,
-        "options": {
-            "temperature": 0,
-            "seed": seed,
-            "num_predict": num_predict,
-            "stop": ["\n\n", "###", "Question:", "---"],
-        },
-    }
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode(),
-        headers=headers,
-    )
-    t0 = time.time()
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        result = json.loads(r.read())
-    return result.get("response", "").strip(), time.time() - t0
-
-
-def encode_image(path: Path) -> str:
-    return base64.b64encode(path.read_bytes()).decode()
+STOP_SEQUENCES = ["\n\n", "###", "Question:", "---"]
 
 
 def build_combined_prompt() -> str:
@@ -131,6 +89,110 @@ def build_combined_prompt() -> str:
 
 
 COMBINED_PROMPT = build_combined_prompt()
+
+
+def resolve_provider(provider: str) -> str:
+    """auto → openrouter if OPENROUTER_API_KEY set, else ollama."""
+    if provider != "auto":
+        return provider
+    if os.environ.get("OPENROUTER_API_KEY"):
+        return "openrouter"
+    return "ollama"
+
+
+def endpoint_for(provider: str) -> str:
+    """Human-readable endpoint identifier for logs and stats."""
+    if provider == "openrouter":
+        return os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+    return base
+
+
+def call_openrouter(model: str, prompt: str, image_b64: str, timeout: int = 180,
+                    seed: int = 42, num_predict: int = 1500) -> tuple[str, float]:
+    """OpenRouter (OpenAI-compatible) chat completion with one image."""
+    import urllib.request
+    url = os.environ.get("OPENROUTER_BASE_URL",
+                         "https://openrouter.ai/api/v1").rstrip("/") + "/chat/completions"
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        raise ValueError("OPENROUTER_API_KEY is not set (add it to .env)")
+    payload = {
+        "model": model,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url",
+                 "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+            ],
+        }],
+        "temperature": 0,
+        "seed": seed,
+        "max_tokens": num_predict,
+        "stop": STOP_SEQUENCES,
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        # OpenRouter app attribution (optional but recommended)
+        "HTTP-Referer": "https://github.com/zaheralkaei/multimodal_analysis",
+        "X-Title": "multimodal_analysis",
+    }
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers)
+    t0 = time.time()
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        result = json.loads(r.read())
+    try:
+        text = result["choices"][0]["message"]["content"] or ""
+    except (KeyError, IndexError, TypeError):
+        raise RuntimeError(f"unexpected OpenRouter response shape: {result}") from None
+    return text.strip(), time.time() - t0
+
+
+def call_ollama(model: str, prompt: str, image_b64: str, timeout: int = 120,
+                seed: int = 42, num_predict: int = 1500) -> tuple[str, float]:
+    """Call Ollama /api/generate (local or cloud)."""
+    import urllib.request
+    base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+    url = f"{base}/generate" if base.endswith("/api") else f"{base}/api/generate"
+    headers = {"Content-Type": "application/json"}
+    if "ollama.com" in base:
+        api_key = os.environ.get("OLLAMA_API_KEY", "")
+        if not api_key:
+            raise ValueError("OLLAMA_BASE_URL points to ollama.com but OLLAMA_API_KEY is not set")
+        headers["Authorization"] = f"Bearer {api_key}"
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "images": [image_b64],
+        "stream": False,
+        "options": {
+            "temperature": 0,
+            "seed": seed,
+            "num_predict": num_predict,
+            "stop": STOP_SEQUENCES,
+        },
+    }
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers)
+    t0 = time.time()
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        result = json.loads(r.read())
+    return result.get("response", "").strip(), time.time() - t0
+
+
+def call_llm(provider: str, model: str, prompt: str, image_b64: str,
+             timeout: int = 120, seed: int = 42, num_predict: int = 1500) -> tuple[str, float]:
+    """Dispatch to the configured backend."""
+    if provider == "openrouter":
+        return call_openrouter(model, prompt, image_b64, timeout=timeout, seed=seed,
+                               num_predict=num_predict)
+    return call_ollama(model, prompt, image_b64, timeout=timeout, seed=seed,
+                       num_predict=num_predict)
+
+
+def encode_image(path: Path) -> str:
+    return base64.b64encode(path.read_bytes()).decode()
 
 
 def parse_json_response(raw: str) -> dict:
@@ -166,14 +228,16 @@ def parse_json_response(raw: str) -> dict:
     return cleaned
 
 
-def analyze_shots(model: str, shots: list[dict], frames_dir: Path,
+def analyze_shots(provider: str, model: str, shots: list[dict], frames_dir: Path,
                   out_csv: Path) -> tuple[list[dict], dict]:
     """For each shot, ask the combined JSON-mode prompt once. Saves incrementally."""
     rows = []
-    stats = {"calls": 0, "errors": 0, "parse_errors": 0, "total_seconds": 0.0}
+    stats = {"calls": 0, "errors": 0, "parse_errors": 0, "total_seconds": 0.0, "skipped": []}
 
-    # Resume support: load any existing rows from out_csv.
-    existing = {}
+    # Resume support: load any existing rows from out_csv. A shot is re-analyzed
+    # when its mid_frame changed (AUDIT_R4: phase 1 mid-frame fix can shift
+    # every mid-frame — stale rows must not survive).
+    existing: dict[int, dict] = {}
     if out_csv.exists():
         with out_csv.open(encoding="utf-8") as f:
             for r in csv.DictReader(f):
@@ -183,31 +247,23 @@ def analyze_shots(model: str, shots: list[dict], frames_dir: Path,
                     pass
         if existing:
             print(f"[info] resuming from existing CSV: {len(existing)} shots already done")
-            cols = ["shot_idx", "start_sec", "end_sec", "duration_sec", "mid_frame"] + [q[0] for q in QUESTIONS]
-            tmp_rows = sorted(existing.values(), key=lambda r: int(r["shot_idx"]))
-            with out_csv.open("w", encoding="utf-8", newline="") as f:
-                w = csv.DictWriter(f, fieldnames=cols)
-                w.writeheader()
-                for r in tmp_rows:
-                    w.writerow(r)
 
     cols = ["shot_idx", "start_sec", "end_sec", "duration_sec", "mid_frame"] + [q[0] for q in QUESTIONS]
 
-    file_exists = out_csv.exists()
-    f_out = out_csv.open("a", encoding="utf-8", newline="")
-    writer = csv.DictWriter(f_out, fieldnames=cols)
-    if not file_exists:
+    with out_csv.open("w", encoding="utf-8", newline="") as f_out:
+        writer = csv.DictWriter(f_out, fieldnames=cols)
         writer.writeheader()
-
-    try:
         for i, shot in enumerate(shots):
-            if i in existing:
-                rows.append(existing[i])
+            mid_rel = shot.get("mid_frame_path", "")
+            stale_row = existing.get(i)
+            if stale_row is not None and stale_row.get("mid_frame") == mid_rel:
+                rows.append(stale_row)
+                writer.writerow(stale_row)
                 continue
-            mid_rel = shot["mid_frame_path"]
             mid_path = REPO_ROOT / mid_rel
-            if not mid_path.exists():
+            if not mid_rel or not mid_path.exists():
                 print(f"[warn] shot {i}: mid-frame missing: {mid_path}", flush=True)
+                stats["skipped"].append(i)
                 continue
             b64 = encode_image(mid_path)
             row = {
@@ -218,19 +274,19 @@ def analyze_shots(model: str, shots: list[dict], frames_dir: Path,
                 "mid_frame": mid_rel,
             }
             try:
-                            raw, secs = call_ollama(model, COMBINED_PROMPT, b64)
-                            parsed = parse_json_response(raw)
-                            if "_parse_error" in parsed:
-                                row["caption"] = f"[parse_error: {parsed['_parse_error']}]"
-                                stats["parse_errors"] += 1
-                            else:
-                                for qname, _ in QUESTIONS:
-                                    v = parsed.get(qname, "")
-                                    if qname == "emotion" and NORMALIZE_EMOTIONS and v:
-                                        v = _normalize_emotion_raw(v)
-                                    row[qname] = v
-                            stats["calls"] += 1
-                            stats["total_seconds"] += secs
+                raw, secs = call_llm(provider, model, COMBINED_PROMPT, b64)
+                parsed = parse_json_response(raw)
+                if "_parse_error" in parsed:
+                    row["caption"] = f"[parse_error: {parsed['_parse_error']}]"
+                    stats["parse_errors"] += 1
+                else:
+                    for qname, _ in QUESTIONS:
+                        v = parsed.get(qname, "")
+                        if qname == "emotion" and NORMALIZE_EMOTIONS and v:
+                            v = _normalize_emotion_raw(v)
+                        row[qname] = v
+                stats["calls"] += 1
+                stats["total_seconds"] += secs
             except Exception as e:
                 row["caption"] = f"[error: {e}]"
                 stats["errors"] += 1
@@ -242,25 +298,31 @@ def analyze_shots(model: str, shots: list[dict], frames_dir: Path,
                       f"(avg {stats['total_seconds']/max(1, stats['calls']):.1f}s/call, "
                       f"{stats['parse_errors']} parse errors)",
                       flush=True)
-    finally:
-        f_out.close()
     return rows, stats
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    default_model = os.environ.get("VISION_MODEL", "gemma3:4b")
+    default_model = os.environ.get("VISION_MODEL", "google/gemma-4-31b-it")
     parser.add_argument("--model", default=default_model,
-                       help=f"Ollama vision model name (default: {default_model}). "
-                            f"Cloud options include gemini-3-flash-preview, gemma3:27b.")
+                        help=f"Vision model name (default: {default_model}). "
+                             "OpenRouter example: google/gemma-4-31b-it; "
+                             "Ollama examples: gemma3:27b, gemma3:4b (local).")
+    parser.add_argument("--provider", default="auto", choices=["auto", "openrouter", "ollama"],
+                        help="Backend (default: auto — OpenRouter if OPENROUTER_API_KEY set, else Ollama)")
     args = parser.parse_args()
 
-    # Show config
-    base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-    has_key = bool(os.environ.get("OLLAMA_API_KEY"))
-    print(f"[info] endpoint: {base}")
+    provider = resolve_provider(args.provider)
+    endpoint = endpoint_for(provider)
+    has_key = bool(os.environ.get("OPENROUTER_API_KEY") if provider == "openrouter"
+                   else os.environ.get("OLLAMA_API_KEY"))
+    print(f"[info] provider: {provider}")
+    print(f"[info] endpoint: {endpoint}")
     print(f"[info] auth: {'bearer token' if has_key else 'no auth (local)'}")
     print(f"[info] model: {args.model}")
+    if provider == "openrouter" and not has_key:
+        print("[error] OPENROUTER_API_KEY is not set. Add it to .env (see .env.example).")
+        return 1
 
     shots_path = PROCESSED / "shots.json"
     if not shots_path.exists():
@@ -273,30 +335,48 @@ def main() -> int:
 
     # Quick health check
     print(f"[info] testing model ...", flush=True)
+    dummy_path = PROCESSED / "_healthcheck.jpg"
     try:
         from PIL import Image
         dummy = Image.new("RGB", (224, 224), color=(128, 128, 128))
-        dummy_path = PROCESSED / "_healthcheck.jpg"
         dummy.save(dummy_path)
         b64 = base64.b64encode(dummy_path.read_bytes()).decode()
-        timeout = 180 if "ollama.com" in base else 60
-        resp, secs = call_ollama(args.model, "Reply with the word 'ready' only.", b64, timeout=timeout, num_predict=50)
+        timeout = 180 if provider == "openrouter" else 60
+        resp, secs = call_llm(provider, args.model, "Reply with the word 'ready' only.",
+                              b64, timeout=timeout, num_predict=50)
         print(f"[ok] model responded in {secs:.1f}s: {resp[:50]!r}", flush=True)
-        dummy_path.unlink(missing_ok=True)
     except Exception as e:
         print(f"[error] model health check failed: {e}")
-        print(f"  - if using cloud: check OLLAMA_API_KEY in .env")
-        print(f"  - if using local: ensure ollama is running and model is pulled: ollama pull {args.model}")
+        if provider == "openrouter":
+            print(f"  - check OPENROUTER_API_KEY in .env and that '{args.model}' exists on openrouter.ai")
+        else:
+            print(f"  - if using cloud: check OLLAMA_API_KEY in .env")
+            print(f"  - if using local: ensure ollama is running and model is pulled: ollama pull {args.model}")
         return 1
+    finally:
+        dummy_path.unlink(missing_ok=True)
 
     print(f"\n[info] analyzing {len(shots)} shots with combined JSON prompt = "
-          f"{len(shots)} total calls (was {len(shots) * len(QUESTIONS)} before A1 fix)", flush=True)
+          f"{len(shots)} total calls", flush=True)
     out_csv = PROCESSED / "shot_vision.csv"
-    rows, stats = analyze_shots(args.model, shots, PROCESSED / "frames", out_csv)
+    rows, stats = analyze_shots(provider, args.model, shots, PROCESSED / "frames", out_csv)
 
-    print(f"\n[ok] wrote {out_csv.relative_to(REPO_ROOT)} ({len(rows)} rows, "
+    # Persist what was ACTUALLY used — phases 7/8 read this (AUDIT_R4 F4)
+    stats.update({
+        "provider": provider,
+        "model": args.model,
+        "endpoint": endpoint,
+        "n_shots": len(shots),
+        "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+    })
+    stats_path = PROCESSED / "shot_vision_stats.json"
+    stats_path.write_text(json.dumps(stats, indent=2) + "\n", encoding="utf-8")
+
+    print(f"\n[ok] wrote {disp(out_csv)} ({len(rows)} rows, "
           f"{stats['calls']} successful calls, {stats['parse_errors']} parse errors, "
           f"{stats['errors']} errors)")
+    if stats["skipped"]:
+        print(f"[warn] shots skipped (missing mid-frame): {stats['skipped']}")
     print(f"[stats] total time: {stats['total_seconds']:.0f}s "
           f"({stats['total_seconds']/60:.1f} min, "
           f"avg {stats['total_seconds']/max(1,stats['calls']):.1f}s/call)")

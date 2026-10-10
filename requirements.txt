@@ -34,3 +34,6 @@ Pillow>=10.0.0
 
 # Whisper large-v3 needs huggingface-cli for model download
 # huggingface_hub>=0.20.0
+
+# Tests (dev)
+pytest>=8.0.0

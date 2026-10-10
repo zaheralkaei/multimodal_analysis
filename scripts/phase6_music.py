@@ -1,9 +1,9 @@
 """
 Phase 6 — Music structure analysis with librosa.
 
-Reads:  data/processed/audio.wav (from Phase 0)
-Writes: data/processed/music_features.csv — per-second features
-        data/processed/music_summary.json — global stats (tempo, key, beats)
+Reads:  data/<video_id>/audio.wav (from Phase 0)
+Writes: data/<video_id>/music_features.csv — per-second features
+        data/<video_id>/music_summary.json — global stats (tempo, key, beats)
 
 Extracts:
   - tempo (BPM)
@@ -17,6 +17,7 @@ import argparse, json, os, sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+from _paths import disp
 PROCESSED = REPO_ROOT / "data" / "processed"
 if "PROCESSED_DIR" in os.environ:
     PROCESSED = Path(os.environ["PROCESSED_DIR"])
@@ -135,14 +136,12 @@ def main() -> int:
         w.writeheader()
         for row in rows:
             w.writerow(row)
-    print(f"[ok] wrote {out_csv.relative_to(REPO_ROOT)} ({len(rows)} rows)")
+    print(f"[ok] wrote {disp(out_csv)} ({len(rows)} rows)")
 
-    # Write summary JSON (without beat_times in printed summary for brevity)
+    # Write summary JSON
     out_json = PROCESSED / "music_summary.json"
-    printed_summary = {k: v for k, v in summary.items() if k != "beat_times"}
-    printed_summary["n_beat_times_in_json"] = len(summary["beat_times"])
     out_json.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
-    print(f"[ok] wrote {out_json.relative_to(REPO_ROOT)}")
+    print(f"[ok] wrote {disp(out_json)}")
 
     print(f"\n[stats] tempo: {summary['tempo_bpm']} BPM, key: {summary['key']}, "
           f"{summary['n_beats']} beats across {summary['duration_sec']:.0f}s")

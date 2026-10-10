@@ -1,13 +1,14 @@
 """
 Phase 4 — Speech/lyrics transcription with faster-whisper.
 
-Reads:  data/processed/audio.wav (from Phase 0)
-Writes: data/processed/transcript.csv — per-segment transcript with timestamps
-        data/processed/transcript.json — same as JSON
+Reads:  data/<video_id>/audio.wav (from Phase 0)
+Writes: data/<video_id>/transcript.csv — per-segment transcript with timestamps
+        data/<video_id>/transcript.json — same as JSON
 
 Uses faster-whisper (CTranslate2 backend, ~4x faster than openai-whisper).
-Default model: small.en (good for English music, ~2GB RAM). For better
-lyrics quality use medium or large-v3.
+Default model: small (multilingual, auto-detects language — good for music
+videos in any language, ~2GB RAM). For English-only speed use small.en;
+for better lyrics quality use medium or large-v3.
 
 Note: Whisper is trained on speech, not music. On sung lyrics it often works
 "well enough" but quality varies. For music videos with heavy reverb or
@@ -18,6 +19,7 @@ import argparse, json, os, sys, time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+from _paths import disp
 PROCESSED = REPO_ROOT / "data" / "processed"
 if "PROCESSED_DIR" in os.environ:
     PROCESSED = Path(os.environ["PROCESSED_DIR"])
@@ -60,8 +62,10 @@ def transcribe(audio_path: Path, model_size: str = "small",
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--model", default="small.en",
-                       help="whisper model size: tiny.en, base.en, small.en, medium.en, large-v3")
+    parser.add_argument("--model", default="small",
+                        help="whisper model size (default: small, multilingual; "
+                             "English-only alternatives: tiny.en, base.en, small.en, medium.en; "
+                             "higher quality: large-v3)")
     parser.add_argument("--language", default=None,
                        help="force language (e.g. 'en'); default = auto-detect")
     args = parser.parse_args()
@@ -84,12 +88,12 @@ def main() -> int:
         w.writeheader()
         for seg in segments:
             w.writerow(seg)
-    print(f"[ok] wrote {out_csv.relative_to(REPO_ROOT)} ({len(segments)} rows)")
+    print(f"[ok] wrote {disp(out_csv)} ({len(segments)} rows)")
 
     # Write JSON
     out_json = PROCESSED / "transcript.json"
     out_json.write_text(json.dumps(segments, indent=2) + "\n", encoding="utf-8")
-    print(f"[ok] wrote {out_json.relative_to(REPO_ROOT)}")
+    print(f"[ok] wrote {disp(out_json)}")
 
     # Sample stats
     if segments:

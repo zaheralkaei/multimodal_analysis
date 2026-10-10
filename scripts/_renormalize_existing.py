@@ -5,14 +5,21 @@ and want to apply them to the current data.
 
 Usage:
     python scripts/_renormalize_existing.py
-    # Writes data/processed/shot_vision_normalized.csv (does NOT overwrite original)
+    # Writes <PROCESSED_DIR>/shot_vision_normalized.csv (does NOT overwrite original)
+
+Honors the PROCESSED_DIR env var like every phase script (round-4 audit F7:
+the old code always read data/processed/, which broke in the v3 per-video
+restructure).
 """
 from __future__ import annotations
-import csv, sys
+import csv, os, sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+from _paths import disp
 PROCESSED = REPO_ROOT / "data" / "processed"
+if "PROCESSED_DIR" in os.environ:
+    PROCESSED = Path(os.environ["PROCESSED_DIR"])
 sys.path.insert(0, str(Path(__file__).parent))
 from _normalize_emotion import normalize_emotion
 
@@ -38,7 +45,7 @@ def main() -> int:
             writer.writerow(row)
             n += 1
     print(f"[ok] re-normalized {n} rows ({n_changed} changed)")
-    print(f"[ok] wrote {dst.relative_to(REPO_ROOT)}")
+    print(f"[ok] wrote {disp(dst)}")
     print()
     print("To use the normalized data, either:")
     print(f"  cp {dst} {src}")

@@ -1,66 +1,111 @@
 """
 Phase 8 — Interactive HTML dashboard.
 
-Reads:  data/processed/sync_per_shot.csv + sync_stats.json (Phase 7)
-        data/processed/shot_detection_stats.json (Phase 1)
-        data/processed/music_summary.json (Phase 6)
-Writes: reports/dashboard.html
+Reads:  data/<video_id>/sync_per_shot.csv + sync_stats.json (Phase 7)
+        data/<video_id>/shot_detection_stats.json (Phase 1)
+        data/<video_id>/music_summary.json (Phase 6)
+Writes: reports/<video_id>/dashboard.html
 
 A single-file Plotly HTML dashboard with:
   - Synchronized multi-track timeline (shots / CLAP mood / music energy / beats)
-  - Per-shot detail table (top 50 of N shots)
-  - **Filtering by emotion / camera motion / audio mood** (interactive controls)
-  - **Comparisons**: emotion distribution, camera motion distribution, audio mood averages
+  - Per-shot detail table
+  - Emotion / camera motion / audio mood charts
   - "Honest findings" section (auto-computed from data)
   - "Data quality" section listing which streams had data
+
+Round-4 audit fixes:
+  - Vision model name comes from what actually ran (phase 2 → 7 provenance),
+    never hardcoded (F4)
+  - EMOTION_COLORS covers all 16 canonical emotions; matching is word-boundary
+    so "intense" no longer inherits the "tense" color (F5)
+  - Guards for missing/empty CSVs: missing music/transcript files, zero rows,
+    single CLAP window (F6)
 """
 from __future__ import annotations
-import argparse, html as html_lib, json, os, sys
+import argparse, html as html_lib, json, os, re, sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+from _paths import disp
 PROCESSED = REPO_ROOT / "data" / "processed"
 if "PROCESSED_DIR" in os.environ:
     PROCESSED = Path(os.environ["PROCESSED_DIR"])
 REPORTS = REPO_ROOT / "reports"
 if "REPORTS_DIR" in os.environ:
     REPORTS = Path(os.environ["REPORTS_DIR"])
-REPORTS.mkdir(exist_ok=True)
 
+from _clap_tags import MOOD_TAGS
 
-MOOD_TAGS = [
-    "happy and bright", "sad and melancholic", "aggressive and intense",
-    "romantic and tender", "triumphant and epic", "calm and peaceful",
-    "tense and anxious", "dreamy and ethereal", "dark and ominous",
-    "playful and whimsical", "lonely and introspective", "powerful and confident",
-]
-
-# Color map for visual emotions (matches HTML)
 EMOTION_COLORS = {
-    "happy": "#2ca02c", "joyful": "#2ca02c", "excited": "#2ca02c",
-    "sad": "#1f77b4", "melancholic": "#1f77b4", "lonely": "#1f77b4",
-    "angry": "#d62728", "aggressive": "#d62728", "anxious": "#d62728", "tense": "#d62728",
-    "neutral": "#999999", "calm": "#999999",
-    "contemplative": "#9467bd", "introspective": "#9467bd", "dreamy": "#9467bd",
-    "romantic": "#e377c2", "tender": "#e377c2", "intimate": "#e377c2",
-    "epic": "#ff7f0e", "powerful": "#ff7f0e", "triumphant": "#ff7f0e", "confident": "#ff7f0e",
-    "playful": "#f5c518", "whimsical": "#f5c518",
-    "dark": "#000000", "ominous": "#000000",
+    # The 16 canonical emotions (from _normalize_emotion.py) — AUDIT_R4 F5:
+    # sensual/energetic/intense/fearful/surprised/disgusted were missing and
+    # rendered as gray.
+    "joyful": "#2ca02c",
+    "sad": "#1f77b4",
+    "angry": "#d62728",
+    "fearful": "#8c564b",
+    "surprised": "#ffd700",
+    "disgusted": "#bcbd22",
+    "neutral": "#999999",
+    "contemplative": "#9467bd",
+    "sensual": "#e75480",
+    "energetic": "#ff7f0e",
+    "melancholic": "#6495ed",
+    "anxious": "#ff9896",
+    "playful": "#f5c518",
+    "romantic": "#e377c2",
+    "intense": "#c0392b",
+    "confident": "#ffbb78",
+    # Aliases the model (or the old vocabulary) may emit, mapped to the same
+    # color family as their nearest canonical emotion.
+    "happy": "#2ca02c",
+    "excited": "#ff7f0e",
+    "lonely": "#1f77b4",
+    "aggressive": "#d62728",
+    "tense": "#ff9896",
+    "calm": "#999999",
+    "introspective": "#9467bd",
+    "dreamy": "#9467bd",
+    "tender": "#e377c2",
+    "intimate": "#e377c2",
+    "epic": "#ffbb78",
+    "powerful": "#ffbb78",
+    "triumphant": "#ffbb78",
+    "whimsical": "#f5c518",
+    "dark": "#c0392b",
+    "ominous": "#c0392b",
     "peaceful": "#17becf",
 }
 
 
 def color_for_emotion(emotion_text: str) -> str:
+    """Color for an emotion string, matched on whole words only.
+
+    Word-boundary matching matters: 'intense' must not match the 'tense' key
+    (it has its own color). Keys are tried longest-first so multi-word labels
+    like 'dark and ominous' resolve before their components.
+    """
     e = (emotion_text or "").lower()
-    for k, c in EMOTION_COLORS.items():
-        if k in e:
-            return c
+    keys = sorted(EMOTION_COLORS, key=len, reverse=True)
+    for k in keys:
+        if re.search(rf"\b{re.escape(k)}\b", e):
+            return EMOTION_COLORS[k]
     return "#999999"
+
+
+
+def load_csv_rows(path: Path, label: str) -> list:
+    """Read a CSV if it exists; warn (not crash) if missing (AUDIT_R4 F6)."""
+    if not path.exists():
+        print(f"[warn] {label} not found at {path} — chart will be empty")
+        return []
+    import csv
+    return list(csv.DictReader(path.open(encoding="utf-8")))
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    args = parser.parse_args()
+    parser.parse_args()
 
     sync_csv = PROCESSED / "sync_per_shot.csv"
     stats_path = PROCESSED / "sync_stats.json"
@@ -69,8 +114,8 @@ def main() -> int:
         return 1
 
     import csv
-    shots = list(csv.DictReader(sync_csv.open(encoding="utf-8")))
-    stats = json.loads(stats_path.read_text(encoding="utf-8"))
+    shots = load_csv_rows(sync_csv, "sync_per_shot.csv")
+    stats = json.loads(stats_path.read_text(encoding="utf-8")) if stats_path.exists() else {}
     print(f"[info] loaded {len(shots)} shots + stats")
 
     # Optional inputs
@@ -92,6 +137,9 @@ def main() -> int:
     extracted_fps = metadata.get("frame_fps", "?")
     video_fps = metadata.get("video", {}).get("fps", "?")
     n_frames_extracted = metadata.get("frames_extracted", "?")
+
+    # Vision model provenance — what ACTUALLY ran (AUDIT_R4 F4; never hardcode)
+    vision_model_name = stats.get("vision_model", "unknown (phase 2 stats missing)")
 
     from collections import Counter
     import plotly.graph_objects as go
@@ -127,25 +175,26 @@ def main() -> int:
         showlegend=False, name="Shots",
     ), row=1, col=1)
 
-    # Add emotion legend
-    seen_emotions = set()
+    # Add emotion legend (dedup by color, label = first emotion with that color)
+    seen_emotions: dict[str, str] = {}
     for emotion in sorted(set(emotion_texts)):
         c = color_for_emotion(emotion)
         if c not in seen_emotions:
-            seen_emotions.add(c)
+            seen_emotions[c] = emotion
             fig.add_trace(go.Bar(
                 x=[None], y=[None], marker_color=c, name=emotion,
                 showlegend=True, hoverinfo="skip",
             ), row=1, col=1)
 
     # Row 2: CLAP mood curves
-    clap_path = PROCESSED / "audio_clap.csv"
-    if clap_path.exists():
-        clap = list(csv.DictReader(clap_path.open(encoding="utf-8")))
+    clap = load_csv_rows(PROCESSED / "audio_clap.csv", "audio_clap.csv")
+    top_vars = []
+    if len(clap) >= 2:
         import statistics
-        variances = {tag: statistics.variance([float(r[tag]) for r in clap]) for tag in MOOD_TAGS if tag in clap[0]}
-        top4 = sorted(variances, key=variances.get, reverse=True)[:4]
-        for tag in top4:
+        tag_var = {tag: statistics.variance([float(r[tag]) for r in clap])
+                   for tag in MOOD_TAGS if tag in clap[0]}
+        top_vars = sorted(tag_var, key=tag_var.get, reverse=True)[:4]
+        for tag in top_vars:
             xs = [(float(r["start_sec"]) + float(r["end_sec"])) / 2 for r in clap]
             ys = [float(r[tag]) for r in clap]
             fig.add_trace(go.Scatter(
@@ -154,7 +203,7 @@ def main() -> int:
             ), row=2, col=1)
 
     # Row 3: RMS energy + beat ticks
-    music = list(csv.DictReader((PROCESSED / "music_features.csv").open(encoding="utf-8")))
+    music = load_csv_rows(PROCESSED / "music_features.csv", "music_features.csv")
     if music:
         xs = [float(r["start_sec"]) for r in music]
         ys = [float(r["rms_energy"]) for r in music]
@@ -173,17 +222,16 @@ def main() -> int:
         ), row=3, col=1)
 
     # Row 4: lyrics as colored bars
-    transcript = list(csv.DictReader((PROCESSED / "transcript.csv").open(encoding="utf-8")))
-    if transcript:
-        for t in transcript:
-            s, e = float(t["start_sec"]), float(t["end_sec"])
-            text = t.get("text", "")
-            fig.add_trace(go.Bar(
-                x=[e - s], y=[1], base=[s],
-                marker_color="#17becf", marker_line_width=0,
-                name="Lyrics", showlegend=False,
-                hovertemplate=f"<b>Lyric</b><br>{s:.1f}-{e:.1f}s<br>{html_lib.escape(text[:60])}<extra></extra>",
-            ), row=4, col=1)
+    transcript = load_csv_rows(PROCESSED / "transcript.csv", "transcript.csv")
+    for t in transcript:
+        s, e = float(t["start_sec"]), float(t["end_sec"])
+        text = t.get("text", "")
+        fig.add_trace(go.Bar(
+            x=[e - s], y=[1], base=[s],
+            marker_color="#17becf", marker_line_width=0,
+            name="Lyrics", showlegend=False,
+            hovertemplate=f"<b>Lyric</b><br>{s:.1f}-{e:.1f}s<br>{html_lib.escape(text[:60])}<extra></extra>",
+        ), row=4, col=1)
 
     fig.update_layout(
         height=1000, width=None,
@@ -234,23 +282,24 @@ def main() -> int:
                            and s.get("camera_motion") == s.get("vision_camera_from_vlm"))
     agreement_pct = round(100 * agreement_count / max(1, len([s for s in shots if s.get("vision_camera_from_vlm")])), 1)
 
+    n_shots = len(shots)
     vlm_cam_html = f"<table border='1' style='border-collapse:collapse;font-family:monospace;font-size:12px;'>"
     vlm_cam_html += "<tr><th style='padding:6px 12px;background:#eee;'>Source</th><th style='padding:6px 12px;background:#eee;'>Method</th><th style='padding:6px 12px;background:#eee;'>Top motion</th><th style='padding:6px 12px;background:#eee;'>Shot count</th></tr>"
     # OpenCV row
     top_opencv = cam_counts.most_common(1)[0] if cam_counts else ("?", 0)
-    vlm_cam_html += f"<tr><td style='padding:6px 12px;'><b>OpenCV</b></td><td style='padding:6px 12px;'>optical flow (50 frames per shot)</td><td style='padding:6px 12px;'>{top_opencv[0]}</td><td style='padding:6px 12px;'>{top_opencv[1]} ({100*top_opencv[1]/len(shots):.0f}%)</td></tr>"
+    vlm_cam_html += f"<tr><td style='padding:6px 12px;'><b>OpenCV</b></td><td style='padding:6px 12px;'>optical flow over shot frames</td><td style='padding:6px 12px;'>{html_lib.escape(str(top_opencv[0]))}</td><td style='padding:6px 12px;'>{top_opencv[1]} ({100*top_opencv[1]/max(1, n_shots):.0f}%)</td></tr>"
     # VLM row
     top_vlm = vlm_counts.most_common(1)[0] if vlm_counts else ("?", 0)
-    vlm_cam_html += f"<tr><td style='padding:6px 12px;'><b>Gemini 3 Flash</b></td><td style='padding:6px 12px;'>single mid-frame per shot</td><td style='padding:6px 12px;'>{top_vlm[0]}</td><td style='padding:6px 12px;'>{top_vlm[1]} ({100*top_vlm[1]/max(1, len(shots)):.0f}%)</td></tr>"
+    vlm_cam_html += f"<tr><td style='padding:6px 12px;'>{html_lib.escape(vision_model_name)}</td><td style='padding:6px 12px;'>single mid-frame per shot</td><td style='padding:6px 12px;'>{html_lib.escape(str(top_vlm[0]))}</td><td style='padding:6px 12px;'>{top_vlm[1]} ({100*top_vlm[1]/max(1, n_shots):.0f}%)</td></tr>"
     # Agreement row
-    vlm_cam_html += f"<tr><td style='padding:6px 12px;'><b>Agreement</b></td><td style='padding:6px 12px;'>shot-level exact-match</td><td style='padding:6px 12px;'>-</td><td style='padding:6px 12px;'>{agreement_count}/{len(shots)} = <b>{agreement_pct}%</b></td></tr>"
+    vlm_cam_html += f"<tr><td style='padding:6px 12px;'><b>Agreement</b></td><td style='padding:6px 12px;'>shot-level exact-match</td><td style='padding:6px 12px;'>-</td><td style='padding:6px 12px;'>{agreement_count}/{n_shots} = <b>{agreement_pct}%</b></td></tr>"
     vlm_cam_html += "</table>"
-    vlm_cam_html += "<p style='font-size:11px;color:#666;margin-top:4px;'>The mid-frame alone cannot show camera motion (Gemini sees 1 instant). OpenCV optical flow sees 50+ frames per shot and is genuinely better at detecting pan/tilt/zoom. The VLM still helps with semantic understanding (what the subject is doing). Both signals are kept separately in <code>sync_per_shot.csv</code> as <code>camera_motion</code> and <code>vision_camera_from_vlm</code>.</p>"
+    vlm_cam_html += "<p style='font-size:11px;color:#666;margin-top:4px;'>The mid-frame alone cannot show camera motion (the VLM sees 1 instant). OpenCV optical flow sees every extracted frame in the shot and is genuinely better at detecting pan/tilt/zoom. The VLM still helps with semantic understanding (what the subject is doing). Both signals are kept separately in <code>sync_per_shot.csv</code> as <code>camera_motion</code> and <code>vision_camera_from_vlm</code>.</p>"
 
     # ===== Chart 4: Audio mood averages =====
-    clap_loaded = list(csv.DictReader(clap_path.open(encoding="utf-8"))) if clap_path.exists() else []
-    if clap_loaded:
-        avg_per_mood = [(tag, sum(float(r[tag]) for r in clap_loaded) / len(clap_loaded)) for tag in MOOD_TAGS]
+    clap_tags_present = [t for t in MOOD_TAGS if clap and t in clap[0]]
+    if clap_tags_present:
+        avg_per_mood = [(tag, sum(float(r[tag]) for r in clap) / len(clap)) for tag in clap_tags_present]
         avg_per_mood.sort(key=lambda x: x[1], reverse=True)
         fig_mood = go.Figure(data=[go.Bar(
             x=[v for _, v in avg_per_mood], y=[t for t, _ in avg_per_mood],
@@ -269,7 +318,7 @@ def main() -> int:
     # ===== Chart 5: Per-shot detail table (all shots with thumbnails) =====
     # Copy mid-frames to reports/frames/ so dashboard works as a self-contained file
     report_frames_dir = REPORTS / "frames"
-    report_frames_dir.mkdir(exist_ok=True)
+    report_frames_dir.mkdir(parents=True, exist_ok=True)
     import shutil
     n_copied = 0
     n_skipped = 0
@@ -288,9 +337,8 @@ def main() -> int:
                     continue
                 shutil.copy2(src, dst)
                 n_copied += 1
-    print(f"[info] copied {n_copied} mid-frames to {report_frames_dir.relative_to(REPO_ROOT)} (skipped {n_skipped} that already match)")
+    print(f"[info] copied {n_copied} mid-frames to {disp(report_frames_dir)} (skipped {n_skipped} that already match)")
 
-    n_rows = len(shots)
     table_rows = []
     headers = ["Thumb", "#", "Time", "Dur", "Emotion", "Camera", "Caption", "Audio", "Lyrics"]
     table_rows.append(headers)
@@ -335,7 +383,8 @@ def main() -> int:
                     cells.append(f"<{tag} style='padding:4px 8px;background:{bg};text-align:left;'>—</{tag}>")
             elif ci == 4:  # emotion column
                 bg = color_for_emotion(str(cell))
-                text_color = "white" if bg in ["#000000", "#1f77b4", "#9467bd", "#d62728"] else "black"
+                text_color = "white" if bg in ["#1f77b4", "#9467bd", "#d62728", "#c0392b",
+                                               "#8c564b", "#6495ed"] else "black"
                 cells.append(f"<{tag} style='padding:4px 8px;background:{bg};color:{text_color};text-align:left;'>{cell}</{tag}>")
             else:
                 cells.append(f"<{tag} style='padding:4px 8px;background:{bg};text-align:left;'>{cell}</{tag}>")
@@ -345,12 +394,14 @@ def main() -> int:
 
     # ===== Honest findings =====
     findings = []
-    findings.append(f"<li>Detected <b>{len(shots)} shots</b> using <b>{shot_stats.get('detector', 'PySceneDetect-ContentDetector')}</b> "
+    safe_model = html_lib.escape(vision_model_name)
+    findings.append(f"<li>Detected <b>{n_shots} shots</b> using <b>{shot_stats.get('detector', 'PySceneDetect-ContentDetector')}</b> "
                    f"(threshold={shot_stats.get('threshold', '?')}, min_scene_len={shot_stats.get('min_scene_len_frames', '?')} frames).</li>")
-    findings.append(f"<li>Shot duration: avg <b>{shot_stats.get('avg_shot_duration_sec', '?'):.1f}s</b>, "
-                   f"min <b>{shot_stats.get('min_shot_duration_sec', '?'):.1f}s</b>, "
-                   f"max <b>{shot_stats.get('max_shot_duration_sec', '?'):.1f}s</b>.</li>")
-    if stats.get("cuts_on_beat") is not None and len(shots) > 0:
+    if shot_stats:
+        findings.append(f"<li>Shot duration: avg <b>{shot_stats.get('avg_shot_duration_sec', '?'):.1f}s</b>, "
+                       f"min <b>{shot_stats.get('min_shot_duration_sec', '?'):.1f}s</b>, "
+                       f"max <b>{shot_stats.get('max_shot_duration_sec', '?'):.1f}s</b>.</li>")
+    if stats.get("cuts_on_beat") is not None and n_shots > 0:
         findings.append(f"<li><b>{stats['cuts_on_beat']}/{stats['total_shots']} cuts</b> on a beat "
                        f"({stats['cuts_on_beat_pct']}%) — within 100ms tolerance.</li>")
     if stats.get("shots_with_lyrics"):
@@ -358,29 +409,24 @@ def main() -> int:
                        f"({stats['shots_with_lyrics_pct']}%).</li>")
     if music_summary.get("tempo_bpm"):
         findings.append(f"<li>Music: <b>{music_summary['tempo_bpm']} BPM</b>, key <b>{music_summary.get('key', '?')}</b> "
-                       f"({music_summary.get('n_beats', '?')} beats across {music_summary.get('duration_sec', '?'):.0f}s).</li>")
-    if clap_loaded:
-        top_mood = max(MOOD_TAGS, key=lambda t: sum(float(r[t]) for r in clap_loaded) / len(clap_loaded))
+                       f"({music_summary.get('n_beats', '?')} beats across {music_summary.get('duration_sec', '?')}s).</li>")
+    if clap_tags_present:
+        top_mood = max(clap_tags_present, key=lambda t: sum(float(r[t]) for r in clap) / len(clap))
         findings.append(f"<li>Dominant audio mood (CLAP): <b>{top_mood}</b></li>")
     if emotion_counts:
         top_emotion = emotion_counts.most_common(1)[0]
-        findings.append(f"<li>Most common visual emotion: <b>{top_emotion[0]}</b> ({top_emotion[1]} shots, "
-                       f"{top_emotion[1]/len(shots)*100:.0f}%)</li>")
+        findings.append(f"<li>Most common visual emotion: <b>{html_lib.escape(str(top_emotion[0]))}</b> ({top_emotion[1]} shots, "
+                        f"{top_emotion[1]/max(1, n_shots)*100:.0f}%) — vision model: {safe_model}</li>")
     findings_html = "<ul>" + "".join(findings) + "</ul>"
 
     # ===== Data quality section =====
     dq_items = []
-    # Load sync_stats for vision model info
-    sync_stats_full = {}
-    if stats_path.exists():
-        sync_stats_full = json.loads(stats_path.read_text(encoding="utf-8"))
-    vision_model_name = sync_stats_full.get("vision_model", "gemini-3-flash-preview")
     dq_items.append(("Frame extraction", f"{n_frames_extracted} frames at {extracted_fps} fps (video native: {round(float(video_fps), 1) if video_fps != '?' else '?'} fps)"))
-    dq_items.append(("Shot detection", f"✓ {len(shots)} shots from PySceneDetect-ContentDetector (threshold={shot_stats.get('threshold', '?')}, min_scene_len={shot_stats.get('min_scene_len_frames', '?')} frames)"))
-    dq_items.append(("Vision captions", f"✓ {len([s for s in shots if s.get('vision_caption') and '[error' not in s.get('vision_caption', '')])}/{len(shots)} shots have captions (vision model: {vision_model_name})"))
-    dq_items.append(("Camera motion", f"✓ {len([s for s in shots if s.get('camera_motion')])}/{len(shots)} shots classified"))
+    dq_items.append(("Shot detection", f"✓ {n_shots} shots from PySceneDetect-ContentDetector (threshold={shot_stats.get('threshold', '?')}, min_scene_len={shot_stats.get('min_scene_len_frames', '?')} frames)"))
+    dq_items.append(("Vision captions", f"✓ {len([s for s in shots if s.get('vision_caption') and '[error' not in s.get('vision_caption', '')])}/{n_shots} shots have captions (vision model: {safe_model})"))
+    dq_items.append(("Camera motion", f"✓ {len([s for s in shots if s.get('camera_motion')])}/{n_shots} shots classified"))
     dq_items.append(("Transcription", f"{'✓' if transcript else '⚠'} {len(transcript)} segments ({stats.get('total_lyric_chars', 0)} chars)"))
-    dq_items.append(("CLAP audio", f"{'✓' if clap_loaded else '⚠'} {len(clap_loaded)} 5s windows × {len(MOOD_TAGS)} mood tags"))
+    dq_items.append(("CLAP audio", f"{'✓' if clap else '⚠'} {len(clap)} 5s windows × {len(MOOD_TAGS)} mood tags"))
     dq_items.append(("Music structure", f"{'✓' if music_summary else '⚠'} {music_summary.get('n_beats', 0)} beats, {music_summary.get('tempo_bpm', '?')} BPM"))
     dq_html = "<table border='1' style='border-collapse:collapse;font-family:monospace;'>"
     for label, status in dq_items:
@@ -388,17 +434,17 @@ def main() -> int:
     dq_html += "</table>"
 
     # ===== Methodology caveat =====
-    caveats = """
+    caveats = f"""
     <ul>
-      <li><b>Visual analysis</b> uses <code>gemini-3-flash-preview</code> via Ollama cloud. The model "sees" one mid-frame per shot and answers 8 questions. Quality depends on the chosen mid-frame.</li>
+      <li><b>Visual analysis</b> uses <code>{safe_model}</code>. The model "sees" one mid-frame per shot and answers 8 questions. Quality depends on the chosen mid-frame.</li>
       <li><b>Shot detection</b> uses PySceneDetect's ContentDetector (HSV color delta + edge detection). Detects both hard cuts and gradual transitions. False positives possible in compression artifacts.</li>
-      <li><b>Camera motion</b> is computed via OpenCV optical flow between consecutive frames within each shot (at {extracted_fps} fps → 0.5s time resolution). Coarser than a human labeler but consistent. At lower fps, the optical flow algorithm tends to over-classify zoom-in because frames 1s+ apart often have apparent radial divergence.</li>
+      <li><b>Camera motion</b> is computed via OpenCV optical flow between consecutive frames within each shot (at {extracted_fps} fps → {round(1 / extracted_fps, 2) if isinstance(extracted_fps, (int, float)) and extracted_fps else '?'}s time resolution). Coarser than a human labeler but consistent. At lower fps, the optical flow algorithm tends to over-classify zoom-in because frames 1s+ apart often have apparent radial divergence.</li>
       <li><b>Transcription</b> uses faster-whisper. Trained on speech, not music. On heavily reverbed or whispered vocals, expect gaps or mistakes.</li>
       <li><b>CLAP similarity</b>: 0-1 probability per tag. High score = audio is <i>similar to</i> the tag, not that it <i>is</i> the tag.</li>
-      <li><b>"Cut on beat"</b>: shot start is within ±100ms of a detected beat. {pct}% for this video; compare across videos for genre-level patterns.</li>
+      <li><b>"Cut on beat"</b>: shot start is within ±100ms of a detected beat. {stats.get('cuts_on_beat_pct', 0)}% for this video; compare across videos for genre-level patterns.</li>
       <li><b>Key detection</b> uses Krumhansl-Schmuckler template matching on chroma. Works for most popular music; fails on atonal tracks.</li>
     </ul>
-    """.format(pct=f"{stats.get('cuts_on_beat_pct', 0)}%", extracted_fps=extracted_fps)
+    """
 
     # ===== Build full HTML =====
     full_html = f"""<!doctype html>
@@ -433,7 +479,7 @@ def main() -> int:
   table and <a href="https://github.com/zaheralkaei/multimodal_analysis/blob/main/docs/COMPARISON_1FPS_VS_2FPS.md">
   docs/COMPARISON_1FPS_VS_2FPS.md</a> for what changes between 1 fps and 2 fps.
 </p>
-<p>Single video analyzed across 7 streams. All numbers auto-computed from CSV/JSON files in <code>data/processed/</code>. Generated by <code>scripts/phase8_dashboard.py</code>.</p>
+<p>Single video analyzed across 7 streams. All numbers auto-computed from CSV/JSON files in <code>data/&lt;video_id&gt;/</code>. Generated by <code>scripts/phase8_dashboard.py</code>.</p>
 
 <div class="findings">
   <h2>Honest findings (computed dynamically)</h2>
@@ -442,16 +488,16 @@ def main() -> int:
 
 <div class="quality">
   <h2>Data quality</h2>
-<p class="section-subtitle"><b>Method:</b> Auto-computed table from <code>data/processed/*.json</code>. Each row shows ✓/⚠ + the actual numbers. Frame count, frame rate, detector params, and model names all come from the upstream files (metadata.json, shot_detection_stats.json, sync_stats.json). If a model is wrong, regenerate it and re-run this script.</p>
+<p class="section-subtitle"><b>Method:</b> Auto-computed table from <code>data/&lt;video_id&gt;/*.json</code>. Each row shows ✓/⚠ + the actual numbers. Frame count, frame rate, detector params, and model names all come from the upstream files (metadata.json, shot_detection_stats.json, sync_stats.json, shot_vision_stats.json). If a model is wrong, regenerate it and re-run this script.</p>
   {dq_html}
 </div>
 
 <h2>1. Synchronized timeline</h2>
-<p class="section-subtitle"><b>Method:</b> 4 stacked tracks sharing the x-axis. <b>Shots</b> = bars colored by visual emotion (from Gemini 3 Flash captions), positioned at each shot's start time. <b>Audio mood</b> = top-4 CLAP tags by variance, plotted as curves over the 5s windows. <b>Energy + beats</b> = librosa RMS per second + beat tracker ticks. <b>Lyrics</b> = faster-whisper segments.</p>
+<p class="section-subtitle"><b>Method:</b> 4 stacked tracks sharing the x-axis. <b>Shots</b> = bars colored by visual emotion (from {safe_model} captions), positioned at each shot's start time. <b>Audio mood</b> = top-4 CLAP tags by variance, plotted as curves over the 5s windows. <b>Energy + beats</b> = librosa RMS per second + beat tracker ticks. <b>Lyrics</b> = faster-whisper segments.</p>
 {timeline_html}
 
 <h2>2. Per-modality breakdowns</h2>
-<p class="section-subtitle"><b>Method:</b> Aggregations across all {len(shots)} shots. <b>Emotion</b> = Gemini 3 Flash caption emotion word, color-coded by sentiment family. <b>Camera motion</b> = OpenCV optical flow classification (pan/tilt/zoom/static), see Phase 3 docstring for the per-class decision boundaries. <b>Audio mood</b> = mean CLAP probability for each of 12 mood tags across all 5s windows.</p>
+<p class="section-subtitle"><b>Method:</b> Aggregations across all {n_shots} shots. <b>Emotion</b> = {safe_model} caption emotion word, color-coded by sentiment family. <b>Camera motion</b> = OpenCV optical flow classification (pan/tilt/zoom/static), see Phase 3 docstring for the per-class decision boundaries. <b>Audio mood</b> = mean CLAP probability for each of 12 mood tags across all 5s windows.</p>
 <div class="grid">
   <div class="panel">{emotion_dist_html}</div>
   <div class="panel">{cam_dist_html}</div>
@@ -459,8 +505,8 @@ def main() -> int:
 <div class="panel">{vlm_cam_html}</div>
 <div class="panel">{mood_avg_html}</div>
 
-<h2>3. Per-shot detail ({len(shots)} shots total)</h2>
-<p class="section-subtitle"><b>Method:</b> One row per shot from PySceneDetect ContentDetector. <b>Thumbnail</b> = mid-frame of the shot (the same image sent to the vision model). <b>Emotion</b> = Gemini 3 Flash answer to "What is the dominant emotion shown?". <b>Camera</b> = OpenCV optical flow dominant motion class for the shot. <b>Caption</b> = first 80 chars of Gemini 3 Flash caption. <b>Audio</b> = highest-probability CLAP mood tag averaged across the shot's duration. <b>Lyrics</b> = faster-whisper text overlapping the shot (truncated to 60 chars).</p>
+<h2>3. Per-shot detail ({n_shots} shots total)</h2>
+<p class="section-subtitle"><b>Method:</b> One row per shot from PySceneDetect ContentDetector. <b>Thumbnail</b> = mid-frame of the shot (the same image sent to the vision model). <b>Emotion</b> = {safe_model} answer to "What is the dominant emotion shown?". <b>Camera</b> = OpenCV optical flow dominant motion class for the shot. <b>Caption</b> = first 80 chars of {safe_model} caption. <b>Audio</b> = highest-probability CLAP mood tag averaged across the shot's duration. <b>Lyrics</b> = faster-whisper text overlapping the shot (truncated to 60 chars).</p>
 {table_html}
 
 <div class="caveat">
@@ -473,7 +519,7 @@ def main() -> int:
 """
     out = REPORTS / "dashboard.html"
     out.write_text(full_html, encoding="utf-8")
-    print(f"[ok] wrote {out.relative_to(REPO_ROOT)} ({out.stat().st_size:,} bytes)")
+    print(f"[ok] wrote {disp(out)} ({out.stat().st_size:,} bytes)")
     return 0
 
 
