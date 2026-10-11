@@ -31,6 +31,7 @@ numpy>=1.24.0
 pandas>=2.0.0
 plotly>=5.18.0
 Pillow>=10.0.0
+Flask>=3.0.0                 # local web UI (scripts/app.py)
 
 # Whisper large-v3 needs huggingface-cli for model download
 # huggingface_hub>=0.20.0

@@ -164,6 +164,25 @@ dashboard simply omits their tracks.
 | 7 | Sync | Join everything per shot | `sync_per_shot.csv`, `sync_stats.json` |
 | 8 | Dashboard | Plotly HTML | `reports/<video_id>/dashboard.html` |
 
+### Web UI (local Flask app)
+
+Don't want the CLI? A local web interface wraps the same pipeline:
+
+```bash
+python scripts/app.py          # open http://127.0.0.1:5000
+python scripts/app.py --port 8080
+```
+
+- analyze a **YouTube URL or an uploaded video file**, with the same
+  options (content type, fps, whisper model/language, skip slow phases)
+- watch live progress (phase + pipeline log) — runs take 15–25 min, one analysis at a time
+- open the rendered dashboard in the browser and **download the analysis as a ZIP**
+  (dashboard + thumbnails + all data CSVs/JSONs — the dashboard keeps working offline from the extracted folder)
+- past analyses are listed on the home page; job logs land in `logs/ui/`
+
+Binds to 127.0.0.1 only — nothing is served to the network. Only phase 2
+makes API calls (using your `.env` OpenRouter key); everything else runs locally.
+
 ### Skip slow phases
 
 ```bash

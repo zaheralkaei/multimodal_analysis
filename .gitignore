@@ -49,6 +49,7 @@ venv/
 
 # Logs
 logs/*.log
+logs/ui/
 
 # Environment variables / secrets
 .env
