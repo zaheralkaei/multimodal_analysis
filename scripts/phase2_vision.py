@@ -55,7 +55,7 @@ except ImportError:
 QUESTIONS = [
     ("caption",      "Describe this scene in 1-2 sentences. Be specific about what is visible."),
     ("camera",       "What is the camera doing? ONE word from: static, pan, tilt, zoom-in, zoom-out, dolly, tracking, handheld, unknown."),
-    ("emotion",      "Dominant emotion of people in frame. ONE OR TWO WORDS from: joyful, sad, angry, fearful, surprised, disgusted, neutral, contemplative, sensual, energetic, melancholic, anxious, playful, romantic, intense, confident."),
+    ("emotion",      "Dominant emotion of people in frame. ONE OR TWO WORDS from: joyful, sad, angry, fearful, surprised, disgusted, neutral, contemplative, sensual, energetic, melancholic, anxious, playful, romantic, intense, confident. Answer 'no people' if no person is visible."),
     ("colors",       "3 most prominent colors, comma-separated (e.g. 'blue, white, brown')."),
     ("entities",     "Main objects and people, comma-separated. Max 8 items, concise."),
     ("location",     "indoor or outdoor + setting in 3-5 words (e.g. 'indoor bedroom', 'outdoor beach at sunset')."),
@@ -383,7 +383,7 @@ def analyze_shots(provider: str, model: str, shots: list[dict], frames_dir: Path
             print(f"[info] resuming from existing CSV: {len(existing)} shots already done")
 
     cols = (["shot_idx", "start_sec", "end_sec", "duration_sec", "mid_frame"]
-            + [q[0] for q in QUESTIONS] + ["status", "model"])
+            + [q[0] for q in QUESTIONS] + ["emotion_raw", "status", "model"])
 
     with out_csv.open("w", encoding="utf-8", newline="") as f_out:
         writer = csv.DictWriter(f_out, fieldnames=cols)
@@ -428,8 +428,11 @@ def analyze_shots(provider: str, model: str, shots: list[dict], frames_dir: Path
                     row["status"] = "mock" if provider == "mock" else "ok"
                     for qname, _ in QUESTIONS:
                         v = parsed.get(qname, "")
-                        if qname == "emotion" and NORMALIZE_EMOTIONS and v:
-                            v = _normalize_emotion_raw(v)
+                        if qname == "emotion":
+                            # keep the model's own words for auditing the mapping
+                            row["emotion_raw"] = v
+                            if NORMALIZE_EMOTIONS and v:
+                                v = _normalize_emotion_raw(v)
                         row[qname] = v
                 stats["calls"] += 1
                 stats["total_seconds"] += secs

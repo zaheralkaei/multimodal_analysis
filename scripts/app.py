@@ -34,7 +34,7 @@ import zipfile
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from flask import Flask, Response, jsonify, render_template_string, request, send_file
 from werkzeug.utils import safe_join
@@ -54,6 +54,8 @@ WHISPER_MODELS = ("tiny", "base", "small", "medium", "large-v3")
 MAX_UPLOAD = 2 * 1024 ** 3  # 2 GB upload cap (Flask auto-413s beyond this)
 
 VID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+URL_RE = re.compile(r"^https?://[^\s\"'<>`]+$")
+LOCAL_HOSTNAMES = {"127.0.0.1", "localhost", "::1"}
 PHASE_RE = re.compile(r"========== phase (\d+) ==========")
 
 Popen = subprocess.Popen  # module alias so tests can monkeypatch the launcher
@@ -63,6 +65,26 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD
 
 JOBS: dict[str, dict] = {}
 LOCK = threading.Lock()
+
+
+# ------------------------------------------------------------------- security
+
+@app.before_request
+def _local_same_origin_only():
+    """The UI binds to 127.0.0.1, but any web page the user has open can still
+    send requests to it. Audit R9: a cross-site form POST to /start could
+    launch downloads and paid API calls. Reject:
+      - a Host header that is not a loopback name (DNS-rebinding attacks), and
+      - state-changing requests whose Origin is another site."""
+    if urlparse(f"//{request.host}").hostname not in LOCAL_HOSTNAMES:
+        return bad("forbidden host", 403)
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        origin = request.headers.get("Origin")
+        if origin is not None and urlparse(origin).netloc != request.host:
+            return bad("cross-origin request refused", 403)
+        if request.headers.get("Sec-Fetch-Site") == "cross-site":
+            return bad("cross-origin request refused", 403)
+    return None
 
 
 # --------------------------------------------------------------------------- jobs
@@ -260,8 +282,8 @@ def start():
         source = (request.form.get("url") or "").strip()
         if not source:
             return bad("provide a YouTube URL or an uploaded video file")
-        if not source.startswith(("http://", "https://")):
-            return bad("URL must start with http:// or https://")
+        if not URL_RE.fullmatch(source):
+            return bad("URL must start with http:// or https:// and contain no spaces or quotes")
         video_id = derive_video_id(source, None)
 
     custom = (request.form.get("custom_id") or "").strip()

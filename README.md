@@ -156,9 +156,10 @@ python scripts/run_pipeline.py URL --content-type series
 ```
 
 Auto-detection is heuristic and explainable — an explicit `--content-type`
-always wins. See `docs/UI_AUDIT.md`. For speeches, `--skip-phase5` (CLAP
-audio tags are music-vocabulary) and phase 6 stay harmless since the
-dashboard simply omits their tracks.
+always wins. See `docs/UI_AUDIT.md`. Keep phase 5 on for auto-detection:
+its music/speech/silence tags decide whether there is music at all (the beat
+tracker reports a "tempo" even for pure speech). With `--skip-phase5` the
+dashboard says music presence is unverified.
 
 ### Phases
 
@@ -190,13 +191,15 @@ python scripts/app.py --port 8080
   (dashboard + thumbnails + all data CSVs/JSONs — the dashboard keeps working offline from the extracted folder)
 - past analyses are listed on the home page; job logs land in `logs/ui/`
 
-Binds to 127.0.0.1 only — nothing is served to the network. Only phase 2
+Binds to 127.0.0.1 only — nothing is served to the network — and refuses
+requests from other websites (Origin/Host checks), so a page open in your
+browser cannot start an analysis. Only phase 2
 makes API calls (using your `.env` OpenRouter key); everything else runs locally.
 
 ### Testing without spending money
 
 ```bash
-python -m pytest -q                         # ~190 unit/integration tests, all offline
+python -m pytest -q                         # 185 unit/integration tests, all offline
 python scripts/preflight.py --online --id <video_id>   # environment + model + price
 python scripts/run_pipeline.py URL --id test_run --provider mock   # full offline rehearsal
 python scripts/run_pipeline.py URL --vision-dry-run                # real model check, no calls
@@ -420,6 +423,9 @@ optical flow (already done in phase 3) for camera motion — see
 
 - [docs/AUDIT.md](docs/AUDIT.md) — round-3 audit report
   (code quality, data correctness, methodology, engineering hygiene)
+
+- [docs/PLAN_ROUND_8.md](docs/PLAN_ROUND_8.md) — round-8 validity fixes + model roadmap
+- [docs/AUDIT_R9.md](docs/AUDIT_R9.md) — round-9 general audit (security, reproducibility)
 
 - [docs/METHODOLOGY_REVIEW.md](docs/METHODOLOGY_REVIEW.md) — alternatives
   to current shot detection, camera motion, transcription (free + paid)

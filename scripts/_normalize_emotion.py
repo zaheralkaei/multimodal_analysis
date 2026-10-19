@@ -13,6 +13,13 @@ Canonical emotions (match the JSON-mode prompt in phase2_vision.py):
     sensual, energetic, melancholic, anxious, playful, romantic, intense, confident
 """
 from __future__ import annotations
+import re
+
+# Not an emotion: the frame shows no person. Kept apart from "neutral" (audit
+# R9) — counting empty landscapes as neutral faces inflated "neutral".
+NO_PEOPLE = "no people"
+NO_PEOPLE_SYNONYMS = ["none", "none (no people)", "no people", "no people visible",
+                      "no person", "no one", "nobody", "no humans", "n/a", "not applicable"]
 
 # Map of canonical emotion → list of synonyms (lowercase, normalized)
 CANONICAL_EMOTIONS = {
@@ -22,8 +29,8 @@ CANONICAL_EMOTIONS = {
     "fearful":      ["fearful", "afraid", "scared", "terrified", "horrified", "panicked", "alarmed", "frightened", "anguished", "in pain", "suffering"],
     "surprised":    ["surprised", "shocked", "amazed", "astonished", "stunned", "startled", "bewildered"],
     "disgusted":    ["disgusted", "disgust", "repulsed", "revulsion", "contempt"],
-    "neutral":      ["neutral", "calm", "indifferent", "composed", "detached", "objective", "none", "none (no people)"],
-    "contemplative":["contemplative", "thoughtful", "pensive", "reflective", "meditative", "wistful", "introspective", "brooding", "yearning", "hopeful"],
+    "neutral":      ["neutral", "calm", "indifferent", "composed", "detached", "objective"],
+    "contemplative":["contemplative", "thoughtful", "pensive", "reflective", "meditative", "introspective", "brooding", "yearning", "hopeful"],
     "sensual":      ["sensual", "sultry", "seductive", "seduct", "intimate", "lustful", "provocative", "passionate", "sultry intent", "sensual intensity", "sultry/confident"],
     "energetic":    ["energetic", "vigorous", "lively", "spirited", "dynamic", "vibrant", "exhilarated", "pumped", "excited", "energetic, intense"],
     "melancholic":  ["melancholic", "melancholy", "wistful", "longing", "mournful", "doleful", "plaintive", "blue", "forlorn"],
@@ -39,6 +46,9 @@ _SYNONYM_TO_CANONICAL: dict[str, str] = {}
 for canonical, syns in CANONICAL_EMOTIONS.items():
     for s in syns:
         _SYNONYM_TO_CANONICAL[s.lower()] = canonical
+for s in NO_PEOPLE_SYNONYMS:
+    _SYNONYM_TO_CANONICAL[s] = NO_PEOPLE
+_BY_LENGTH = sorted(_SYNONYM_TO_CANONICAL, key=len, reverse=True)
 
 
 def normalize_emotion(raw: str) -> str:
@@ -62,14 +72,17 @@ def normalize_emotion(raw: str) -> str:
             text = text.split(suffix)[0].strip()
     if text in _SYNONYM_TO_CANONICAL:
         return _SYNONYM_TO_CANONICAL[text]
-    # Substring match (find longest synonym that appears in the text)
-    best = None
-    best_len = 0
-    for syn, canonical in _SYNONYM_TO_CANONICAL.items():
-        if syn in text and len(syn) > best_len:
-            best = canonical
-            best_len = len(syn)
-    return best or "other"
+    # The prompt asks for one or two words; a long answer is the model
+    # explaining itself, not a label — don't guess an emotion out of it.
+    if len(text.split()) > 6:
+        return "other"
+    # Longest synonym that appears as a WHOLE word/phrase (audit R9: plain
+    # substring matching mapped "courageous"/"dangerous"/"stranger" -> angry
+    # via "rage"/"anger", and "funeral" -> playful via "fun").
+    for syn in _BY_LENGTH:
+        if re.search(rf"(?<![a-z]){re.escape(syn)}(?![a-z])", text):
+            return _SYNONYM_TO_CANONICAL[syn]
+    return "other"
 
 
 def list_canonical() -> list[str]:

@@ -24,7 +24,7 @@ Round 8 fixes (methodology review R2/R3):
     kept for continuity but should not be reported as song structure.
 """
 from __future__ import annotations
-from _clap_tags import ALL_TAGS, MOOD_TAGS, SECTION_TAGS, INSTRUMENT_TAGS, TAG_GROUPS
+from _clap_tags import ALL_TAGS, MOOD_TAGS, SECTION_TAGS, INSTRUMENT_TAGS, TAG_GROUPS, music_share
 
 import argparse, json, os, sys, time
 from pathlib import Path
@@ -94,9 +94,16 @@ def compute_batch_logits(model, processor, chunks: list, sr: int):
     import torch
     inputs = processor(audio=chunks, sampling_rate=sr, text=ALL_TAGS,
                        return_tensors="pt", padding=True)
+    # Audit R9 (reproducibility): for the fused CLAP model, transformers'
+    # feature extractor marks ONE RANDOM clip per batch as "longer" when none
+    # is, routing it through the fusion branch — identical runs differed by up
+    # to 0.53 in a tag probability. Our windows are all < 10 s, so none is
+    # longer: force the flag off for every clip.
+    if "is_longer" in inputs:
+        inputs["is_longer"] = torch.zeros_like(inputs["is_longer"])
     with torch.no_grad():
         outputs = model(**inputs)
-    scale = float(model.logit_scale_a.exp())
+    scale = float(model.logit_scale_a.detach().exp().item())
     return outputs.logits_per_audio.detach().cpu().numpy(), scale
 
 
@@ -173,6 +180,7 @@ def main() -> int:
         "logit_scale": round(scale, 4),
         "tag_groups": TAG_GROUPS,
         "n_windows": len(rows),
+        "music_window_share": music_share(rows),
     }, indent=2) + "\n", encoding="utf-8")
 
     # Quick sanity check

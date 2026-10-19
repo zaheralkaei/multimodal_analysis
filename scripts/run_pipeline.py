@@ -159,19 +159,25 @@ def main() -> int:
         # Local file — pass absolute path
         video_arg = str(Path(args.source).resolve())
 
+    # Argument LISTS, run without a shell (audit R9): the old f-string
+    # commands with shell=True let a URL containing a quote break out of the
+    # quoting and run arbitrary commands (reachable from the web UI).
     phases = [
-        (0, f'phase0_input.py "{video_arg}" --id "{video_id}" --fps {args.fps}'),
-        (1, f"phase1_shots.py --threshold {args.shot_threshold} --min-scene-len {args.min_scene_len}"),
-        (2, f"phase2_vision.py --model {args.model}"
-            + (f" --provider {args.provider}" if args.provider != "auto" else "")
-            + (" --dry-run" if args.vision_dry_run else "")
-            + (f" --max-usd {args.max_usd}" if args.max_usd is not None else "")),
-        (3, f"phase3_camera.py --flow-fps {args.flow_fps}"),
-        (4, f"phase4_transcribe.py --model {args.whisper_model}" + (f" --language {args.whisper_language}" if args.whisper_language else "")),
-        (5, "phase5_audio.py"),
-        (6, "phase6_music.py"),
-        (7, "phase7_sync.py"),
-        (8, "phase8_dashboard.py" + ("" if args.content_type == "auto" else f" --content-type {args.content_type}")),
+        (0, ["phase0_input.py", video_arg, "--id", video_id, "--fps", str(args.fps)]),
+        (1, ["phase1_shots.py", "--threshold", str(args.shot_threshold),
+             "--min-scene-len", str(args.min_scene_len)]),
+        (2, ["phase2_vision.py", "--model", args.model]
+            + (["--provider", args.provider] if args.provider != "auto" else [])
+            + (["--dry-run"] if args.vision_dry_run else [])
+            + (["--max-usd", str(args.max_usd)] if args.max_usd is not None else [])),
+        (3, ["phase3_camera.py", "--flow-fps", str(args.flow_fps)]),
+        (4, ["phase4_transcribe.py", "--model", args.whisper_model]
+            + (["--language", args.whisper_language] if args.whisper_language else [])),
+        (5, ["phase5_audio.py"]),
+        (6, ["phase6_music.py"]),
+        (7, ["phase7_sync.py"]),
+        (8, ["phase8_dashboard.py"]
+            + ([] if args.content_type == "auto" else ["--content-type", args.content_type])),
     ]
 
     from _provenance import new_run
@@ -190,22 +196,20 @@ def main() -> int:
             print(f"[skip] phase 5 (--skip-phase5)")
             continue
         print(f"\n========== phase {n} ==========")
-        full_cmd = f'cd "{REPO_ROOT}" && "{py}" scripts/{cmd}'
+        argv = [py, str(SCRIPTS / cmd[0]), *cmd[1:]]
         # Phase 1 needs the video path — read it from the metadata that
         # phase 0 just wrote (round-4 audit fix F3: was a guess of
         # data/raw/<video_id>.mp4, which never existed for local files)
         if n == 1:
             video_path = resolve_staged_video(video_id, out_dir)
             if video_path:
-                full_cmd = (f'cd "{REPO_ROOT}" && "{py}" scripts/phase1_shots.py '
-                            f'--threshold {args.shot_threshold} --min-scene-len {args.min_scene_len} '
-                            f'--video "{video_path}"')
+                argv += ["--video", video_path]
             else:
                 print("[warn] could not resolve staged video path from metadata.json; "
                       "phase 1 will use its default (data/raw/video.mp4)")
         t0 = _time.time()
-        result = subprocess.run(full_cmd, shell=True, env=env)
-        run["phases"].append({"phase": n, "command": full_cmd.split("&&", 1)[-1].strip(),
+        result = subprocess.run(argv, cwd=str(REPO_ROOT), env=env)
+        run["phases"].append({"phase": n, "command": ["python", *argv[1:]],
                               "returncode": result.returncode,
                               "seconds": round(_time.time() - t0, 1)})
         if result.returncode != 0:

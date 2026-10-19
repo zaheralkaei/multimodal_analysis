@@ -17,6 +17,11 @@ a wrong auto-detection is visible instead of silent.
 """
 from __future__ import annotations
 
+from _clap_tags import music_share
+
+# Share of CLAP windows that must sound like music to call the audio "music".
+MUSIC_SHARE_MIN = 0.3
+
 CONTENT_TYPES = ("auto", "song", "speech", "film", "series", "vlog", "other")
 
 
@@ -60,7 +65,15 @@ def detect_content_type(shots: list, music_summary: dict, transcript: list,
     tempo = _f((music_summary or {}).get("tempo_bpm"))
     n_beats = int(_f((music_summary or {}).get("n_beats")))
     beats_per_sec = n_beats / duration
-    has_music = bool(tempo) and n_beats >= 10
+    beat_track_ok = bool(tempo) and n_beats >= 10
+    # Audit R9: librosa finds a "tempo" in speech too (a 2-min TTS speech gave
+    # 112 BPM), so tempo alone made every speech a "song". Music presence now
+    # comes from CLAP's music/speech/silence split when phase 5 ran.
+    m_share = music_share(clap_rows)
+    if m_share is not None:
+        has_music = beat_track_ok and m_share >= MUSIC_SHARE_MIN
+    else:
+        has_music = beat_track_ok
 
     # Camera staticness (vlog single-camera vs film's edit-heavy grammar)
     motions = [s.get("camera_motion", "") for s in shots]
@@ -70,8 +83,16 @@ def detect_content_type(shots: list, music_summary: dict, transcript: list,
     reasons.append(f"{n} shots (avg {avg_shot:.1f}s), "
                    f"{talk_coverage * 100:.0f}% talk coverage, "
                    f"{chars_per_min:.0f} lyric/speech chars/min")
+    if m_share is not None:
+        reasons.append(f"music in {m_share * 100:.0f}% of 5 s audio windows (CLAP)")
     if has_music:
         reasons.append(f"music detected: {tempo:.0f} BPM, {beats_per_sec:.1f} beats/s")
+        if m_share is None:
+            reasons.append("music presence UNVERIFIED (phase 5 skipped): tempo alone "
+                           "cannot tell speech from music")
+    elif beat_track_ok:
+        reasons.append(f"beat tracker reported {tempo:.0f} BPM but the audio is "
+                       f"mostly not music — tempo ignored")
     else:
         reasons.append("no usable tempo/beat track")
     if motions:

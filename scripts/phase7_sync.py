@@ -118,7 +118,10 @@ def join_data(shots: list[dict], vision: list[dict], camera: list[dict],
         music_in_shot = [r for r in music if float(r["start_sec"]) < e and float(r["end_sec"]) > s]
         rms_vals = [float(r["rms_energy"]) for r in music_in_shot if r.get("rms_energy")]
         avg_rms = round(sum(rms_vals) / len(rms_vals), 5) if rms_vals else 0.0
-        beats_in_shot = sum(int(r.get("n_beats", 0)) for r in music_in_shot)
+        # beats whose time falls inside the shot (audit R9: summing the
+        # per-second counts of every overlapping second credited a 0.7 s shot
+        # with up to 2 s of beats)
+        beats_in_shot = sum(1 for b in beats if s <= float(b) < e)
 
         # Transcript: count segments overlapping
         lyrics_in_shot = [r for r in usable_transcript if float(r["start_sec"]) < e and float(r["end_sec"]) > s and r.get("text", "").strip()]

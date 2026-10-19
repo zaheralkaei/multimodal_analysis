@@ -35,7 +35,36 @@ INSTRUMENT_TAGS = [
     "strings orchestra",
     "vocal only no instruments",
 ]
-ALL_TAGS = MOOD_TAGS + SECTION_TAGS + INSTRUMENT_TAGS
+# Is there music at all? (audit R9) librosa reports a "tempo" for any audio,
+# speech included, so tempo cannot tell a speech from a song. CLAP's
+# zero-shot music/speech split can: on the round-9 check a song scored music
+# in 100 % of windows, a TTS speech in 0 %.
+AUDIO_TYPE_TAGS = [
+    "music",
+    "speech",
+    "silence",
+]
+ALL_TAGS = MOOD_TAGS + SECTION_TAGS + INSTRUMENT_TAGS + AUDIO_TYPE_TAGS
 
 # Probabilities are normalized WITHIN each group (phase 5, round 8).
-TAG_GROUPS = {"mood": MOOD_TAGS, "section": SECTION_TAGS, "instrument": INSTRUMENT_TAGS}
+TAG_GROUPS = {"mood": MOOD_TAGS, "section": SECTION_TAGS, "instrument": INSTRUMENT_TAGS,
+              "audio_type": AUDIO_TYPE_TAGS}
+
+
+def window_audio_type(row: dict) -> str | None:
+    """'music' | 'speech' | 'silence' for one CLAP row, or None if the row
+    predates the audio_type group."""
+    try:
+        scores = {t: float(row[t]) for t in AUDIO_TYPE_TAGS}
+    except (KeyError, TypeError, ValueError):
+        return None
+    return max(scores, key=scores.get)
+
+
+def music_share(rows: list) -> float | None:
+    """Fraction of CLAP windows whose audio type is music (None if unknown)."""
+    kinds = [window_audio_type(r) for r in rows or []]
+    kinds = [k for k in kinds if k is not None]
+    if not kinds:
+        return None
+    return kinds.count("music") / len(kinds)

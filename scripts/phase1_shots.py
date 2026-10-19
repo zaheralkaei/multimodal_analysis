@@ -190,7 +190,7 @@ def main() -> int:
     # Build a frame → "is_boundary" map
     boundary_frames = set()
     for s in shots:
-        boundary_frames.add(int(s["start_sec"] * fps))
+        boundary_frames.add(int(round(s["start_sec"] * fps)))  # start_sec is rounded to ms
     with pred_path.open("w", encoding="utf-8", newline="") as f:
         w = csv.writer(f)
         w.writerow(["frame", "time_sec", "is_boundary", "shot_idx"])

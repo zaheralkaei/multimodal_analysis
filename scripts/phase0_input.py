@@ -91,7 +91,9 @@ def get_video(source: str, video_id: str) -> tuple[Path, str | None]:
         print(f"[info] downloading {source} via yt-dlp ...")
         # Up to 720p video + best audio, merged with our ffmpeg; falls back to
         # a progressive single file (often only 360p) when merging is impossible
-        cmd = [sys.executable, "-m", "yt_dlp", "-o", str(out_tpl)]
+        # --no-playlist: a link copied from a playlist (…&list=…) otherwise
+        # downloads every video in it (audit R9)
+        cmd = [sys.executable, "-m", "yt_dlp", "--no-playlist", "-o", str(out_tpl)]
         ff = ffmpeg_exe()
         if ff:
             cmd += ["--ffmpeg-location", ff,
@@ -100,7 +102,7 @@ def get_video(source: str, video_id: str) -> tuple[Path, str | None]:
         else:
             cmd += ["-f", "best[ext=mp4]/best"]
         try:
-            subprocess.run(cmd + [source], check=True, timeout=600)
+            subprocess.run(cmd + [source], check=True, timeout=3600)
         except FileNotFoundError:
             print("[warn] yt-dlp not installed; install with `pip install yt-dlp`")
             sys.exit(1)
@@ -181,7 +183,15 @@ AUDIO_SPEECH = ("audio.wav", 16000)
 AUDIO_MUSIC = ("audio_music.wav", 48000)
 
 
-def extract_audio(video: Path, out_wav: Path, sample_rate: int = 16000) -> None:
+def media_timeout(duration_sec: float) -> int:
+    """Subprocess timeout that grows with the video: 5 min, or 2x the
+    duration for long inputs (audit R9: a fixed 300 s killed ffmpeg on
+    feature-length films)."""
+    return int(max(300, 2 * (duration_sec or 0)))
+
+
+def extract_audio(video: Path, out_wav: Path, sample_rate: int = 16000,
+                  timeout: int = 300) -> None:
     """Extract mono PCM audio at the given sample rate."""
     out_wav.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
@@ -189,11 +199,11 @@ def extract_audio(video: Path, out_wav: Path, sample_rate: int = 16000) -> None:
         "-vn", "-ac", "1", "-ar", str(sample_rate), "-acodec", "pcm_s16le",
         "-loglevel", "error", str(out_wav)
     ]
-    subprocess.run(cmd, check=True, timeout=300)
+    subprocess.run(cmd, check=True, timeout=timeout)
     print(f"[ok] extracted {sample_rate} Hz audio to {disp(out_wav)} ({out_wav.stat().st_size:,} bytes)")
 
 
-def extract_frames(video: Path, out_dir: Path, fps: int = 1) -> int:
+def extract_frames(video: Path, out_dir: Path, fps: int = 1, timeout: int = 300) -> int:
     """Extract one frame every N seconds. Returns frame count.
 
     Clears any existing frame_*.jpg before extracting to avoid counter
@@ -213,7 +223,7 @@ def extract_frames(video: Path, out_dir: Path, fps: int = 1) -> int:
         "-loglevel", "error",
         str(out_dir / "frame_%05d.jpg")
     ]
-    subprocess.run(cmd, check=True, timeout=300)
+    subprocess.run(cmd, check=True, timeout=timeout)
     frames = sorted(out_dir.glob("frame_*.jpg"))
     print(f"[ok] extracted {len(frames)} frames at {fps}fps to {disp(out_dir)}/")
     return len(frames)
@@ -247,10 +257,11 @@ def main() -> int:
 
     # extract audio + frames in parallel (sequential here for simplicity)
     audio_wav = PROCESSED / AUDIO_SPEECH[0]
-    extract_audio(video, audio_wav, AUDIO_SPEECH[1])
+    tmo = media_timeout(meta.get("duration_sec", 0))
+    extract_audio(video, audio_wav, AUDIO_SPEECH[1], timeout=tmo)
     music_wav = PROCESSED / AUDIO_MUSIC[0]
-    extract_audio(video, music_wav, AUDIO_MUSIC[1])
-    n_frames = extract_frames(video, FRAMES_DIR, args.fps)
+    extract_audio(video, music_wav, AUDIO_MUSIC[1], timeout=tmo)
+    n_frames = extract_frames(video, FRAMES_DIR, args.fps, timeout=tmo)
     meta["frames_extracted"] = n_frames
     meta["frame_fps"] = args.fps
     meta["audio_path"] = disp(audio_wav)

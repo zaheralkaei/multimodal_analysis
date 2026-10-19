@@ -427,3 +427,180 @@ class TestPreflight:
             pf.check_online(r, "a/b", 72, 1.0)
         assert not r.blocking
         assert any("estimated phase-2 cost" in w for _, w, _ in r.items)
+
+
+class TestWebUiSecurity:
+    """Audit R9: command injection via the URL + cross-site requests."""
+
+    @pytest.fixture()
+    def client(self):
+        import app as app_mod
+        app_mod.app.config["TESTING"] = True
+        return app_mod.app.test_client()
+
+    def test_cross_origin_post_refused(self, client):
+        r = client.post("/start", data={"url": "https://youtu.be/abcdefghijk"},
+                        headers={"Origin": "https://evil.example"})
+        assert r.status_code == 403
+
+    def test_cross_site_fetch_metadata_refused(self, client):
+        r = client.post("/job/x/cancel", headers={"Sec-Fetch-Site": "cross-site"})
+        assert r.status_code == 403
+
+    def test_rebound_host_refused(self, client):
+        r = client.get("/", headers={"Host": "attacker.example:5000"})
+        assert r.status_code == 403
+
+    def test_same_origin_allowed(self, client):
+        r = client.get("/", headers={"Host": "127.0.0.1:5000"})
+        assert r.status_code == 200
+
+    def test_quote_in_url_rejected(self, client, monkeypatch):
+        import app as app_mod
+        monkeypatch.setattr(app_mod, "start_job", lambda *a, **k: pytest.fail("must not start"))
+        r = client.post("/start", data={"url": 'https://x.com/a" & calc & "'})
+        assert r.status_code == 400
+
+    def test_runner_never_uses_a_shell(self, tmp_path, monkeypatch):
+        import run_pipeline as rp
+        seen = []
+
+        class R:
+            returncode = 1
+
+        def fake(cmd, *a, **k):
+            if k.get("shell"):
+                pytest.fail("shell=True used")
+            seen.append(cmd)
+            return R()
+        monkeypatch.setattr(rp.subprocess, "run", fake)
+        monkeypatch.setattr(rp, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(rp, "_finish", lambda *a, **k: tmp_path / "m.json")
+        hostile = 'https://example.com/a" & echo INJECTED & "'
+        monkeypatch.setattr("sys.argv", ["run_pipeline.py", hostile, "--id", "x"])
+        with redirect_stdout(io.StringIO()):
+            rp.main()
+        phase0 = [c for c in seen if isinstance(c, list) and any("phase0" in str(x) for x in c)][0]
+        assert hostile in phase0          # passed as ONE argv element, never parsed
+
+
+class TestMusicPresence:
+    """Audit R9: librosa reports a tempo for speech, so tempo alone made
+    every speech a 'song'."""
+
+    def _args(self, kind):
+        from _clap_tags import AUDIO_TYPE_TAGS
+        row = {t: 0.0 for t in AUDIO_TYPE_TAGS}
+        row[kind] = 0.9
+        dur = 130.0
+        return dict(shots=[{"duration_sec": dur, "end_sec": dur, "camera_motion": "static"}],
+                    music_summary={"tempo_bpm": 112.3, "n_beats": 250},
+                    transcript=[{"start_sec": 0, "end_sec": dur, "text": "x" * 1800}],
+                    video_duration=dur, clap_rows=[dict(row) for _ in range(26)])
+
+    def test_speech_with_spurious_tempo_is_speech(self):
+        from _content_profile import detect_content_type
+        prof = detect_content_type(**self._args("speech"))
+        assert prof["type"] == "speech"
+        assert any("tempo ignored" in r for r in prof["reasons"])
+
+    def test_music_is_song(self):
+        from _content_profile import detect_content_type
+        a = self._args("music")
+        a["transcript"] = [{"start_sec": 10, "end_sec": 20, "text": "la la"}]
+        a["shots"] = [{"duration_sec": 2.0, "end_sec": 2.0 * (i + 1), "camera_motion": "pan-left"}
+                      for i in range(65)]
+        assert detect_content_type(**a)["type"] == "song"
+
+    def test_without_clap_music_is_flagged_unverified(self):
+        from _content_profile import detect_content_type
+        a = self._args("speech")
+        a["clap_rows"] = []
+        prof = detect_content_type(**a)
+        assert any("UNVERIFIED" in r for r in prof["reasons"])
+
+    def test_music_share(self):
+        from _clap_tags import music_share
+        rows = [{"music": 0.8, "speech": 0.1, "silence": 0.1},
+                {"music": 0.2, "speech": 0.7, "silence": 0.1}]
+        assert music_share(rows) == 0.5
+        assert music_share([{"happy and bright": 0.3}]) is None
+
+
+class TestEmotionNormalizer:
+    @pytest.mark.parametrize("raw,expected", [
+        ("courageous", "other"), ("dangerous", "other"), ("stranger", "other"),
+        ("funeral mood", "other"), ("dangerous / tense", "anxious"),
+        ("none (no people)", "no people"), ("No people visible.", "no people"),
+        ("sultry/confident", "sensual"), ("intense or fierce", "intense"),
+        ("Based on the body language and downcast expressions of the", "other"),
+    ])
+    def test_whole_word_matching(self, raw, expected):
+        from _normalize_emotion import normalize_emotion
+        assert normalize_emotion(raw) == expected
+
+    def test_no_people_is_not_neutral(self):
+        from _normalize_emotion import normalize_emotion, list_canonical
+        assert normalize_emotion("none") == "no people"
+        assert "no people" not in list_canonical()
+
+    def test_raw_emotion_kept(self, p2, tmp_path, monkeypatch):
+        monkeypatch.setattr(p2, "REPO_ROOT", tmp_path)
+        shots = _shots(tmp_path / "data" / "vid", n=1)
+        monkeypatch.setattr(p2, "call_llm", lambda *a, **k: ('{"emotion": "Sultry"}', 0.0))
+        rows, _ = p2.analyze_shots("openrouter", "m", shots, tmp_path, tmp_path / "v.csv")
+        assert rows[0]["emotion"] == "sensual" and rows[0]["emotion_raw"] == "Sultry"
+
+
+def test_beats_counted_inside_shot_only(tmp_processed):
+    p7 = load_phase("phase7_sync")
+    shots = [{"shot_idx": 0, "start_sec": 0.0, "end_sec": 2.5},
+             {"shot_idx": 1, "start_sec": 2.5, "end_sec": 3.2}]
+    music = [{"start_sec": str(i), "end_sec": str(i + 1), "rms_energy": "0.1", "n_beats": "2"}
+             for i in range(4)]
+    beats = [0.25, 0.75, 1.25, 1.75, 2.25, 2.75, 3.25, 3.75]
+    rows, _ = p7.join_data(shots, [], [], [], [], music, beats, [])
+    assert rows[1]["music_n_beats"] == 1     # only 2.75 lies in [2.5, 3.2)
+
+
+class TestPhase0Download:
+    def test_no_playlist_and_long_timeout(self, tmp_path, monkeypatch):
+        p0 = load_phase("phase0_input", tmp_path)
+        seen = {}
+
+        def fake(cmd, check=False, timeout=None, **k):
+            seen["cmd"], seen["timeout"] = cmd, timeout
+            (p0.RAW / "vid.mp4").write_bytes(b"x")
+        monkeypatch.setattr(p0, "RAW", tmp_path / "raw")
+        monkeypatch.setattr(p0.subprocess, "run", fake)
+        p0.get_video("https://www.youtube.com/watch?v=abcdefghijk&list=PL123", "vid")
+        assert "--no-playlist" in seen["cmd"]
+        assert seen["timeout"] >= 3600
+
+    def test_media_timeout_scales(self, tmp_path):
+        p0 = load_phase("phase0_input", tmp_path)
+        assert p0.media_timeout(60) == 300
+        assert p0.media_timeout(2 * 3600) == 4 * 3600
+
+
+def test_clap_never_marks_short_windows_as_longer(tmp_path):
+    """transformers randomly flags one clip per batch as 'longer' for the fused
+    CLAP model; phase 5 must override that (run-to-run determinism)."""
+    torch = pytest.importorskip("torch")
+    p5 = load_phase("phase5_audio", tmp_path)
+    seen = {}
+
+    def processor(**kw):
+        return {"input_features": torch.zeros(3, 1), "is_longer": torch.tensor([[False], [True], [False]])}
+
+    class Model:
+        logit_scale_a = torch.tensor(0.0)
+
+        def __call__(self, **inputs):
+            seen["is_longer"] = inputs["is_longer"]
+
+            class O:
+                logits_per_audio = torch.zeros(3, 2)
+            return O()
+    p5.compute_batch_logits(Model(), processor, [0, 0, 0], 48000)
+    assert not seen["is_longer"].any()

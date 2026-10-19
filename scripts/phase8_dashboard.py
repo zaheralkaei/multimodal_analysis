@@ -80,6 +80,8 @@ EMOTION_COLORS = {
     "dark": "#c0392b",
     "ominous": "#c0392b",
     "peaceful": "#17becf",
+    # not an emotion — shot without people (audit R9)
+    "no people": "#e0e0e0",
 }
 
 
@@ -346,7 +348,7 @@ def main() -> int:
                 x=xs, y=ys, mode="lines", name=tag,
                 hovertemplate=f"<b>{tag}</b><br>%{{x:.1f}}s: %{{y:.2f}}<extra></extra>",
             ), row=row_i, col=1)
-        fig.update_yaxes(title_text="CLAP similarity", row=row_i, col=1, range=[0, 1])
+        fig.update_yaxes(title_text="CLAP prob. (among mood tags)", row=row_i, col=1, range=[0, 1])
 
     if has_music_track:
         row_i += 1
@@ -372,11 +374,13 @@ def main() -> int:
         for t in transcript:
             s, e = float(t["start_sec"]), float(t["end_sec"])
             text = t.get("text", "")
+            suspect = str(t.get("suspect", "")).lower() == "true"
+            label = "Lyric — flagged as likely hallucination" if suspect else "Lyric"
             fig.add_trace(go.Bar(
                 x=[e - s], y=[1], base=[s],
-                marker_color="#17becf", marker_line_width=0,
+                marker_color="#cccccc" if suspect else "#17becf", marker_line_width=0,
                 name="Lyrics", showlegend=False,
-                hovertemplate=f"<b>Lyric</b><br>{s:.1f}-{e:.1f}s<br>{html_lib.escape(text[:60])}<extra></extra>",
+                hovertemplate=f"<b>{label}</b><br>{s:.1f}-{e:.1f}s<br>{html_lib.escape(text[:60])}<extra></extra>",
             ), row=row_i, col=1)
         fig.update_yaxes(visible=False, row=row_i, col=1)
 
@@ -470,22 +474,32 @@ def main() -> int:
     import shutil
     n_copied = 0
     n_skipped = 0
+    wanted = set()
     for s in shots:
         mid_rel = s.get("mid_frame", "")
         if mid_rel:
             src = REPO_ROOT / mid_rel
             if src.exists():
                 dst = report_frames_dir / src.name
-                # Skip ONLY if existing file matches source size (avoids stale thumbnails
-                # from a previous run with a different video, where the new file has a
-                # different resolution/size). Bug discovered when running on 4 Blocks
-                # after Tyla — both had frame_00009.jpg with different sizes.
-                if dst.exists() and dst.stat().st_size == src.stat().st_size:
+                wanted.add(dst.name)
+                # Skip only an identical copy: same size AND same mtime (copy2
+                # preserves mtime). Size alone let a re-extracted frame with the
+                # same name and byte count keep the old picture (audit R9).
+                if (dst.exists() and dst.stat().st_size == src.stat().st_size
+                        and int(dst.stat().st_mtime) == int(src.stat().st_mtime)):
                     n_skipped += 1
                     continue
                 shutil.copy2(src, dst)
                 n_copied += 1
-    print(f"[info] copied {n_copied} mid-frames to {disp(report_frames_dir)} (skipped {n_skipped} that already match)")
+    # thumbnails no shot references any more (earlier run, other fps) would
+    # otherwise ship in the ZIP download
+    n_removed = 0
+    for old in report_frames_dir.glob("frame_*.jpg"):
+        if old.name not in wanted:
+            old.unlink()
+            n_removed += 1
+    print(f"[info] copied {n_copied} mid-frames to {disp(report_frames_dir)} "
+          f"(skipped {n_skipped} identical, removed {n_removed} stale)")
 
     headers = ["Thumb", "#", "Time", "Dur", "Emotion", "Camera", "Caption", "Audio",
                "Colors", "Location", "Lighting", "Composition", "Entities", "Lyrics", "Beat"]
@@ -538,9 +552,11 @@ def main() -> int:
             "Lyrics": lyrics,
             "Beat": "♩" if cut_on_beat else "",
         }
+        # vals[...] are already HTML-escaped (quotes included) — escaping again
+        # made the filter value differ from the <option> value (audit R9)
         row_attrs = (f" data-i='{i}' data-start='{start_s:.3f}'"
-                     f" data-emotion='{html_lib.escape(vals['Emotion']).replace(chr(39), '')}'"
-                     f" data-camera='{html_lib.escape(vals['Camera']).replace(chr(39), '')}'"
+                     f" data-emotion='{vals['Emotion']}'"
+                     f" data-camera='{vals['Camera']}'"
                      f" data-beat='{cut_on_beat}'")
         cells = [f"<tr{row_attrs}>"]
         for name in headers:
