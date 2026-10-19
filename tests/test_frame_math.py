@@ -59,7 +59,7 @@ class TestShotFrameRange:
         # footage. New math must map seconds -> file indices.
         start_f, end_f = phase3.shot_frame_range(26.86, 29.82, 2)
         times = [(i - 1) / 2 for i in range(start_f, end_f + 1)]
-        assert min(times) < 26.86          # starts at/before the cut
+        assert min(times) >= 26.86         # round 8: never before the cut
         assert max(times) < 29.82          # ends before the next cut
         assert max(times) >= 26.86         # inside the shot
         # At 2 fps a ~3s shot must yield ~6 frames, not 4 files at half-time

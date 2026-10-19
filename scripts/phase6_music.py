@@ -5,6 +5,11 @@ Reads:  data/<video_id>/audio.wav (from Phase 0)
 Writes: data/<video_id>/music_features.csv — per-second features
         data/<video_id>/music_summary.json — global stats (tempo, key, beats)
 
+Round 8: reads the 48 kHz full-band `audio_music.wav` when present (the
+16 kHz speech file capped spectral centroid/contrast at 8 kHz); the tempo
+returned by librosa >= 0.10 is a 1-element array and is now unwrapped
+explicitly (float() on it is deprecated and will become an error).
+
 Extracts:
   - tempo (BPM)
   - beat positions (downbeats)
@@ -67,6 +72,7 @@ def analyze_music(audio_path: Path):
     # Tempo + beat positions
     print("[info] extracting tempo + beats ...")
     tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
+    tempo = float(np.atleast_1d(tempo)[0])
     beat_times = librosa.frames_to_time(beat_frames, sr=sr)
     print(f"[info] tempo: {float(tempo):.1f} BPM, {len(beat_times)} beats")
 
@@ -119,12 +125,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     args = parser.parse_args()
 
-    audio_path = PROCESSED / "audio.wav"
+    audio_path = PROCESSED / "audio_music.wav"
+    band_limited = not audio_path.exists()
+    if band_limited:
+        audio_path = PROCESSED / "audio.wav"
+        print("[warn] audio_music.wav missing — spectral features limited to 8 kHz; "
+              "re-run phase 0 for full-band audio")
     if not audio_path.exists():
         print(f"[error] audio not found at {audio_path}")
         return 1
 
     rows, summary = analyze_music(audio_path)
+    summary["audio_file"] = disp(audio_path)
+    summary["band_limited_16k"] = band_limited
+    summary["librosa_version"] = __import__("librosa").__version__
+    summary["beat_tracker"] = "librosa.beat.beat_track (no downbeats)"
 
     # Write per-second CSV
     import csv

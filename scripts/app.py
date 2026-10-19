@@ -173,6 +173,8 @@ def parse_options(form) -> tuple[list[str], str | None]:
 
     if form.get("skip_phase2"):
         args.append("--skip-phase2")
+    elif form.get("mock_vision"):
+        args += ["--provider", "mock"]  # offline rehearsal: no API calls, labelled MOCK
     if form.get("skip_phase5"):
         args.append("--skip-phase5")
 
@@ -488,6 +490,7 @@ PAGE_HTML = """<!doctype html>
       </div>
       <div class="checks">
         <label><input type="checkbox" name="skip_phase2"> Skip vision captions (phase 2)</label>
+        <label><input type="checkbox" name="mock_vision"> Test run: fake vision answers, no API cost</label>
         <label><input type="checkbox" name="skip_phase5"> Skip audio tagging (phase 5)</label>
       </div>
       <button type="submit" class="go" id="go">Analyze</button>

@@ -26,14 +26,18 @@ RAW = DATA_DIR / "raw"
 FRAMES_DIR = PROCESSED / "frames"
 
 from _paths import disp
+from _tools import ffmpeg_exe, ffprobe_exe
 
 VIDEO_EXTS = [".mp4", ".webm", ".mkv", ".mov", ".avi"]
 
 
 
 def have_ffmpeg() -> bool:
+    exe = ffmpeg_exe()
+    if not exe:
+        return False
     try:
-        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True, timeout=10)
+        subprocess.run([exe, "-version"], capture_output=True, check=True, timeout=10)
         return True
     except Exception:
         return False
@@ -85,10 +89,18 @@ def get_video(source: str, video_id: str) -> tuple[Path, str | None]:
         RAW.mkdir(parents=True, exist_ok=True)
         out_tpl = RAW / f"{video_id}.%(ext)s"
         print(f"[info] downloading {source} via yt-dlp ...")
+        # Up to 720p video + best audio, merged with our ffmpeg; falls back to
+        # a progressive single file (often only 360p) when merging is impossible
+        cmd = [sys.executable, "-m", "yt_dlp", "-o", str(out_tpl)]
+        ff = ffmpeg_exe()
+        if ff:
+            cmd += ["--ffmpeg-location", ff,
+                    "-f", "bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b",
+                    "--merge-output-format", "mp4"]
+        else:
+            cmd += ["-f", "best[ext=mp4]/best"]
         try:
-            subprocess.run([sys.executable, "-m", "yt_dlp", "-o", str(out_tpl),
-                            "-f", "best[ext=mp4]/best", source],
-                           check=True, timeout=600)
+            subprocess.run(cmd + [source], check=True, timeout=600)
         except FileNotFoundError:
             print("[warn] yt-dlp not installed; install with `pip install yt-dlp`")
             sys.exit(1)
@@ -100,9 +112,12 @@ def get_video(source: str, video_id: str) -> tuple[Path, str | None]:
 
 
 def extract_metadata(video: Path) -> dict:
-    """Use ffprobe to extract video metadata."""
+    """Extract video metadata with ffprobe, or OpenCV when ffprobe is absent."""
+    probe = ffprobe_exe()
+    if probe is None:
+        return extract_metadata_cv2(video)
     cmd = [
-        "ffprobe", "-v", "quiet", "-print_format", "json",
+        probe, "-v", "quiet", "-print_format", "json",
         "-show_format", "-show_streams", str(video)
     ]
     out = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
@@ -131,16 +146,51 @@ def extract_metadata(video: Path) -> dict:
     }
 
 
-def extract_audio(video: Path, out_wav: Path) -> None:
-    """Extract 16kHz mono PCM audio."""
+def extract_metadata_cv2(video: Path) -> dict:
+    """ffprobe-free fallback (imageio-ffmpeg ships no ffprobe)."""
+    import cv2
+    cap = cv2.VideoCapture(str(video))
+    if not cap.isOpened():
+        raise RuntimeError(f"OpenCV cannot open {video}")
+    fps = cap.get(cv2.CAP_PROP_FPS) or None
+    n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    fourcc = int(cap.get(cv2.CAP_PROP_FOURCC) or 0)
+    codec = "".join(chr((fourcc >> (8 * i)) & 0xFF) for i in range(4)).strip("\x00 ").lower() or None
+    meta = {
+        "source_file": str(video),
+        "duration_sec": (n / fps) if fps else 0.0,
+        "size_bytes": video.stat().st_size,
+        "bit_rate": 0,
+        "video": {
+            "codec": codec,
+            "width": int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or None,
+            "height": int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or None,
+            "fps": fps,
+            "nb_frames": n or None,
+        },
+        "probe": "opencv",
+    }
+    cap.release()
+    return meta
+
+
+# Two audio files: speech models want 16 kHz; music models (CLAP @48 kHz,
+# librosa spectral features) need the full band — upsampling the 16 kHz file
+# leaves nothing above 8 kHz (methodology review R2).
+AUDIO_SPEECH = ("audio.wav", 16000)
+AUDIO_MUSIC = ("audio_music.wav", 48000)
+
+
+def extract_audio(video: Path, out_wav: Path, sample_rate: int = 16000) -> None:
+    """Extract mono PCM audio at the given sample rate."""
     out_wav.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
-        "ffmpeg", "-y", "-i", str(video),
-        "-vn", "-ac", "1", "-ar", "16000", "-acodec", "pcm_s16le",
+        ffmpeg_exe() or "ffmpeg", "-y", "-i", str(video),
+        "-vn", "-ac", "1", "-ar", str(sample_rate), "-acodec", "pcm_s16le",
         "-loglevel", "error", str(out_wav)
     ]
-    subprocess.run(cmd, check=True, timeout=120)
-    print(f"[ok] extracted audio to {disp(out_wav)} ({out_wav.stat().st_size:,} bytes)")
+    subprocess.run(cmd, check=True, timeout=300)
+    print(f"[ok] extracted {sample_rate} Hz audio to {disp(out_wav)} ({out_wav.stat().st_size:,} bytes)")
 
 
 def extract_frames(video: Path, out_dir: Path, fps: int = 1) -> int:
@@ -157,7 +207,7 @@ def extract_frames(video: Path, out_dir: Path, fps: int = 1) -> int:
             f.unlink()
         print(f"[info] cleared {len(stale)} stale frames from {disp(out_dir)}/")
     cmd = [
-        "ffmpeg", "-y", "-i", str(video),
+        ffmpeg_exe() or "ffmpeg", "-y", "-i", str(video),
         "-vf", f"fps={fps}",
         "-q:v", "2",  # high quality JPEG
         "-loglevel", "error",
@@ -196,12 +246,15 @@ def main() -> int:
           f"{meta['video']['fps']:.2f}fps" if meta['video']['fps'] else "")
 
     # extract audio + frames in parallel (sequential here for simplicity)
-    audio_wav = PROCESSED / "audio.wav"
-    extract_audio(video, audio_wav)
+    audio_wav = PROCESSED / AUDIO_SPEECH[0]
+    extract_audio(video, audio_wav, AUDIO_SPEECH[1])
+    music_wav = PROCESSED / AUDIO_MUSIC[0]
+    extract_audio(video, music_wav, AUDIO_MUSIC[1])
     n_frames = extract_frames(video, FRAMES_DIR, args.fps)
     meta["frames_extracted"] = n_frames
     meta["frame_fps"] = args.fps
     meta["audio_path"] = disp(audio_wav)
+    meta["audio_music_path"] = disp(music_wav)
     meta["frames_dir"] = disp(FRAMES_DIR) + "/"
 
     meta_path = PROCESSED / "metadata.json"

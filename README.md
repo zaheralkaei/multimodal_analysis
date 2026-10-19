@@ -28,10 +28,17 @@ choco install ffmpeg   # Windows; or use your package manager
 cp .env.example .env
 # Edit .env: paste your OPENROUTER_API_KEY from https://openrouter.ai/keys
 
-# 3. Run on any YouTube video
+# 3. Check everything before spending money (free; --online asks OpenRouter's
+#    public model list whether the model exists, takes images, and its price)
+python scripts/preflight.py --online
+
+# 4. Rehearse the whole pipeline offline — phase 2 returns labelled MOCK answers
+python scripts/run_pipeline.py "https://www.youtube.com/watch?v=rtwpk9rb1Dc" --id test_run --provider mock
+
+# 5. Real run (phase 2 aborts if its cost estimate exceeds --max-usd, default $1)
 python scripts/run_pipeline.py "https://www.youtube.com/watch?v=rtwpk9rb1Dc"
 
-# 4. Open the dashboard
+# 6. Open the dashboard
 # reports/<video_id>/dashboard.html
 ```
 
@@ -47,7 +54,7 @@ download). Subsequent runs on the same video resume in seconds.
 | Dependency | Version | Why |
 |---|---|---|
 | Python | 3.11+ | tested on 3.11, 3.13 |
-| ffmpeg | 4.4+ | video frame extraction, audio decode |
+| ffmpeg | 4.4+ | video frame extraction, audio decode (on PATH, `FFMPEG_BINARY`, or `pip install imageio-ffmpeg`) |
 | yt-dlp | 2024+ | YouTube download |
 | ~5 GB free disk | | CLAP model (~2 GB) + per-video data |
 
@@ -98,8 +105,11 @@ The vision model is **google/gemma-4-31b-it** running on **OpenRouter**
    ```
 4. `.env` is gitignored — never commit your key
 
-Pricing: ~$0.09/M input + $0.34/M output tokens; a rate-limited
-`google/gemma-4-31b-it:free` variant also exists.
+Pricing (OpenRouter, checked 2026-10-19): $0.20/M input + $0.40/M output
+tokens — about **$0.04 for a 72-shot video**. Run `python scripts/preflight.py --online`
+for the live price; phase 2 prints an upper-bound estimate and refuses to start
+above `--max-usd` (default $1, env `VISION_MAX_USD`), and stops calling once the
+spend reported by OpenRouter reaches it.
 
 For local Ollama instead (no OpenRouter key), set `OLLAMA_BASE_URL=http://localhost:11434`
 and no `OPENROUTER_API_KEY`; phase 2 auto-falls back to Ollama, or force it with
@@ -156,12 +166,12 @@ dashboard simply omits their tracks.
 |---|---|---|---|
 | 0 | Input prep | Download video, extract frames + audio | `frames/`, `audio.wav`, `metadata.json` |
 | 1 | Shot detection | PySceneDetect ContentDetector | `shots.json`, `shot_predictions.csv` |
-| 2 | Vision | google/gemma-4-31b-it via OpenRouter (JSON-mode prompt) | `shot_vision.csv` |
-| 3 | Camera motion | OpenCV Farneback optical flow | `shot_camera.csv` |
-| 4 | Transcription | faster-whisper (multilingual) | `transcript.json`, `transcript.csv` |
-| 5 | Audio tagging | CLAP (laion/clap-htsat-fused) | `audio_clap.csv` |
-| 6 | Music structure | librosa tempo + key detection | `music_features.csv`, `music_summary.json` |
-| 7 | Sync | Join everything per shot | `sync_per_shot.csv`, `sync_stats.json` |
+| 2 | Vision | google/gemma-4-31b-it via OpenRouter (JSON-mode prompt) | `shot_vision.csv`, `shot_vision_stats.json` |
+| 3 | Camera motion | KLT feature tracks + RANSAC similarity (OpenCV), 8 fps inside each shot | `shot_camera.csv`, `shot_camera_stats.json` |
+| 4 | Transcription | faster-whisper (multilingual), hallucination flags | `transcript.json`, `transcript.csv`, `transcript_stats.json` |
+| 5 | Audio tagging | CLAP (laion/clap-htsat-fused), per-group softmax on 48 kHz audio | `audio_clap.csv`, `audio_clap_cosine.csv` |
+| 6 | Music structure | librosa tempo + key detection (48 kHz audio) | `music_features.csv`, `music_summary.json` |
+| 7 | Sync | Join everything per shot + chance-corrected cut-on-beat test | `sync_per_shot.csv`, `sync_stats.json` |
 | 8 | Dashboard | Plotly HTML | `reports/<video_id>/dashboard.html` |
 
 ### Web UI (local Flask app)
@@ -182,6 +192,27 @@ python scripts/app.py --port 8080
 
 Binds to 127.0.0.1 only — nothing is served to the network. Only phase 2
 makes API calls (using your `.env` OpenRouter key); everything else runs locally.
+
+### Testing without spending money
+
+```bash
+python -m pytest -q                         # ~190 unit/integration tests, all offline
+python scripts/preflight.py --online --id <video_id>   # environment + model + price
+python scripts/run_pipeline.py URL --id test_run --provider mock   # full offline rehearsal
+python scripts/run_pipeline.py URL --vision-dry-run                # real model check, no calls
+```
+
+`--provider mock` answers every shot with deterministic fake JSON marked MOCK;
+the dashboard shows a red "TEST RUN" banner and mock rows are never reused by a
+later real run.
+
+### Reproducibility (for papers)
+
+Each `run_pipeline.py` run appends to `data/<video_id>/run_manifest.json`:
+git commit (+ dirty flag), Python/platform, package versions, the exact
+command of every phase with exit code and time, and the SHA-256 of the input
+video. Model names, prompts, temperature/seed, thresholds and tag
+vocabularies are in each phase's `*_stats.json`, listed in the manifest.
 
 ### Skip slow phases
 
@@ -285,11 +316,11 @@ detector are classical algorithms / deterministic code — no ML, no API.
 | 0 (input) | ffmpeg + yt-dlp | not a model — media tools | download, frame extraction, audio decode | — |
 | 1 (shots) | PySceneDetect ContentDetector | classical computer-vision threshold detector (no ML) | visual scene changes | threshold is tuned per content type; compression artifacts can cause false cuts |
 | 2 (vision) | **google/gemma-4-31b-it** via OpenRouter | vision-language LLM (multimodal transformer: text + image in, text out), Ollama fallback | per-shot caption, camera, emotion, colors, entities, location, lighting, composition | sees one mid-frame per shot (can't see motion); JSON-mode prompt, temperature 0, seed 42 |
-| 3 (camera) | OpenCV Farneback | classical computer vision (dense optical flow) | camera motion (pan/tilt/zoom/static) | 8 discrete classes, no magnitude; zoom-in bias at low fps |
-| 4 (transcription) | **faster-whisper small** | speech-to-text ASR (transformer, CTranslate2-quantized) | spoken/sung words, 99 languages | hallucinates on silence/music; sized via `--whisper-model` |
-| 5 (audio) | **CLAP** (laion/clap-htsat-fused) | contrastive audio-text transformer (audio tagging) | 27 audio tags (mood, section, instrument) | vocabulary locked at design time; similarity ≠ presence |
+| 3 (camera) | OpenCV KLT tracking + RANSAC similarity fit | classical computer vision (global-motion model) | camera pan/tilt/zoom/roll rates, shake, subject-motion share; label static/pan/tilt/zoom/handheld/unknown | zoom vs dolly indistinguishable; a frame-filling subject can be taken for background; thresholds provisional until gold labels |
+| 4 (transcription) | **faster-whisper small** | speech-to-text ASR (transformer, CTranslate2-quantized) | spoken/sung words, 99 languages, word timestamps | hallucinates on silence/music — such segments are flagged `suspect` and excluded from lyric stats; sized via `--whisper-model` |
+| 5 (audio) | **CLAP** (laion/clap-htsat-fused) | contrastive audio-text transformer (audio tagging) | 27 audio tags (mood, section, instrument), softmax within each group | vocabulary locked at design time; similarity ≠ presence; 5 s section tags are weak |
 | 6 (music) | librosa + Krumhansl-Schmuckler | DSP + statistical template matching (no ML) | tempo, beats, key, RMS energy | beat detection fails on rubato music |
-| 7 (sync) | rules | deterministic joins | cross-modal per-shot table + stats | ±100ms beat tolerance is arbitrary |
+| 7 (sync) | rules + exact chance model | deterministic joins; Poisson-binomial test | cross-modal per-shot table + stats; cut-on-beat vs chance | ±100 ms beat tolerance is a convention; beat errors propagate |
 | 8 (dashboard) | Plotly + `_content_profile.py` | rendering + rule-based content-type detection (song/speech/film/vlog) | visualization | auto-detection is heuristic; override with `--content-type` |
 
 ### What each vision model is good at

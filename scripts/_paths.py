@@ -17,3 +17,14 @@ def disp(path) -> str:
         return str(p.resolve().relative_to(REPO_ROOT))
     except (ValueError, OSError):
         return str(p)
+
+# Every phase imports this module. When stdout is redirected on Windows
+# (`> log`, CI, schedulers) Python falls back to cp1252 and the first "✓" or
+# "—" in a print() crashed the phase (found in the round-8 dry run). Keep the
+# console encoding but never die on an unencodable character.
+import sys as _sys
+for _stream in (_sys.stdout, _sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:
+        pass

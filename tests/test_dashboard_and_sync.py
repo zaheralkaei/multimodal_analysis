@@ -88,13 +88,15 @@ class TestPhase7Join:
         assert len(rows) == 2
         assert rows[0]["vision_caption"] == "cap0"
         assert rows[0]["camera_motion"] == "pan-left"
-        assert rows[0]["cut_on_beat"] == True   # start 0.0 vs beat 0.02
+        assert rows[0]["cut_on_beat"] == ""     # round 8: t=0 is not a cut
         assert rows[1]["cut_on_beat"] == True   # start 6.0 vs beat 6.01
         assert rows[0]["n_lyric_segments"] == 1
         assert rows[1]["n_lyric_segments"] == 1  # 7.0-7.5 overlaps 6-8
         assert rows[0]["audio_top_mood"] == "happy and bright"
-        assert stats["cuts_on_beat"] == 2
+        assert stats["cuts_on_beat"] == 1
+        assert stats["total_cuts"] == 1
         assert stats["total_shots"] == 2
+        assert "chance_rate" in stats["cut_beat_alignment"]
 
     def test_main_writes_provenance_and_empty_csv(self, p7, tmp_processed, monkeypatch):
         monkeypatch.setattr("sys.argv", ["phase7_sync.py"])

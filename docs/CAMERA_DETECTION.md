@@ -1,3 +1,15 @@
+> **Round 8 (2026-10-19) — this document is superseded.** A synthetic-motion
+> test showed the Farneback classifier it describes reported every axis
+> **backwards** (camera pan right → "pan-left", tilt down → "tilt-up",
+> zoom in → "zoom-out"), let the first frame pair of each shot straddle the
+> cut, and counted subject motion as camera motion. The "agreement" and
+> accuracy figures below were measured against that classifier, not against
+> human labels, so they are not evidence for or against the VLM. Phase 3 now
+> uses KLT feature tracks + a RANSAC similarity fit at 8 fps inside each shot
+> (see `scripts/phase3_camera.py` and `tests/test_camera.py`). Published 2026
+> benchmarks (CamChoreo, ACaM, CameraBench) confirm that general VLMs remain
+> weak at geometric camera motion — see `docs/PLAN_ROUND_8.md`.
+
 # Camera motion detection: why we use OpenCV optical flow, not the VLM
 
 ## TL;DR

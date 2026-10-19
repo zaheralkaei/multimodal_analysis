@@ -93,6 +93,12 @@ def resolve_staged_video(video_id: str, out_dir: Path) -> str | None:
     return None
 
 
+def _finish(run: dict, out_dir: Path, video_id: str) -> Path:
+    from _provenance import finish_run
+    vp = resolve_staged_video(video_id, out_dir)
+    return finish_run(run, out_dir, Path(vp) if vp else None)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("source", help="YouTube URL or local video path")
@@ -101,7 +107,7 @@ def main() -> int:
     parser.add_argument("--fps", type=int, default=2, help="Frame extraction rate (default 2)")
     parser.add_argument("--model", default=os.environ.get("VISION_MODEL", "google/gemma-4-31b-it"),
                        help="Vision model for phase 2 (default: $VISION_MODEL or google/gemma-4-31b-it via OpenRouter)")
-    parser.add_argument("--provider", default="auto", choices=["auto", "openrouter", "ollama"],
+    parser.add_argument("--provider", default="auto", choices=["auto", "openrouter", "ollama", "mock"],
                        help="Vision backend for phase 2 (default: auto — OpenRouter if OPENROUTER_API_KEY set, else Ollama)")
     parser.add_argument("--whisper-model", default="small", help="Whisper model: tiny/base/small/medium (default small multilingual)")
     parser.add_argument("--whisper-language", default=None,
@@ -114,6 +120,16 @@ def main() -> int:
     parser.add_argument("--content-type", default="auto",
                         choices=["auto", "song", "speech", "film", "series", "vlog", "other"],
                         help="Dashboard emphasis (song/speech/film/vlog/...). Default: auto-detect.")
+    parser.add_argument("--shot-threshold", type=float, default=35.0,
+                        help="PySceneDetect ContentDetector threshold (default 35; lower = more cuts)")
+    parser.add_argument("--min-scene-len", type=int, default=15,
+                        help="Minimum shot length in native frames (default 15)")
+    parser.add_argument("--flow-fps", type=float, default=8.0,
+                        help="Phase 3 sampling rate inside each shot (default 8)")
+    parser.add_argument("--vision-dry-run", action="store_true",
+                        help="Phase 2: estimate cost / check model slug only, no paid calls")
+    parser.add_argument("--max-usd", type=float, default=None,
+                        help="Phase 2 budget cap in USD (default: $VISION_MAX_USD or 1.0)")
     parser.add_argument("--start-from", type=int, default=0,
                        help="Skip phases before this number (0-8). Useful to resume.")
     args = parser.parse_args()
@@ -134,6 +150,7 @@ def main() -> int:
     env = os.environ.copy()
     env["PROCESSED_DIR"] = str(out_dir)
     env["REPORTS_DIR"] = str(reports_dir)
+    env.setdefault("PYTHONIOENCODING", "utf-8")
 
     # Phase 0 needs the video file in a known place. If source is URL, let phase0 download.
     # If local, we could symlink/copy, but phase0 also accepts a local path directly.
@@ -144,15 +161,22 @@ def main() -> int:
 
     phases = [
         (0, f'phase0_input.py "{video_arg}" --id "{video_id}" --fps {args.fps}'),
-        (1, "phase1_shots.py --threshold 35 --min-scene-len 30"),
-        (2, f"phase2_vision.py --model {args.model}" + (f" --provider {args.provider}" if args.provider != "auto" else "")),
-        (3, "phase3_camera.py"),
+        (1, f"phase1_shots.py --threshold {args.shot_threshold} --min-scene-len {args.min_scene_len}"),
+        (2, f"phase2_vision.py --model {args.model}"
+            + (f" --provider {args.provider}" if args.provider != "auto" else "")
+            + (" --dry-run" if args.vision_dry_run else "")
+            + (f" --max-usd {args.max_usd}" if args.max_usd is not None else "")),
+        (3, f"phase3_camera.py --flow-fps {args.flow_fps}"),
         (4, f"phase4_transcribe.py --model {args.whisper_model}" + (f" --language {args.whisper_language}" if args.whisper_language else "")),
         (5, "phase5_audio.py"),
         (6, "phase6_music.py"),
         (7, "phase7_sync.py"),
         (8, "phase8_dashboard.py" + ("" if args.content_type == "auto" else f" --content-type {args.content_type}")),
     ]
+
+    from _provenance import new_run
+    import time as _time
+    run = new_run(sys.argv)
 
     py = sys.executable
     for n, cmd in phases:
@@ -173,17 +197,29 @@ def main() -> int:
         if n == 1:
             video_path = resolve_staged_video(video_id, out_dir)
             if video_path:
-                full_cmd = f'cd "{REPO_ROOT}" && "{py}" scripts/phase1_shots.py --threshold 35 --min-scene-len 30 --video "{video_path}"'
+                full_cmd = (f'cd "{REPO_ROOT}" && "{py}" scripts/phase1_shots.py '
+                            f'--threshold {args.shot_threshold} --min-scene-len {args.min_scene_len} '
+                            f'--video "{video_path}"')
             else:
                 print("[warn] could not resolve staged video path from metadata.json; "
                       "phase 1 will use its default (data/raw/video.mp4)")
+        t0 = _time.time()
         result = subprocess.run(full_cmd, shell=True, env=env)
+        run["phases"].append({"phase": n, "command": full_cmd.split("&&", 1)[-1].strip(),
+                              "returncode": result.returncode,
+                              "seconds": round(_time.time() - t0, 1)})
         if result.returncode != 0:
             print(f"\n[error] phase {n} failed (returncode {result.returncode})")
-            return n
+            run["failed_phase"] = n
+            _finish(run, out_dir, video_id)
+            # 10 + phase: never 0 — `return n` made a phase-0 failure look
+            # like success (exit 0) to callers such as the web UI
+            return 10 + n
 
+    manifest = _finish(run, out_dir, video_id)
     dashboard = reports_dir / "dashboard.html"
     print(f"\n[ok] all phases done.")
+    print(f"[ok] run manifest: {disp(manifest)}")
     print(f"[ok] data:   {disp(out_dir)}/")
     print(f"[ok] report: {disp(dashboard)}")
     return 0

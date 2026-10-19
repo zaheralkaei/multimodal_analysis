@@ -100,8 +100,10 @@ happening?" gave:
 - Tyla: 70/72 "static" (correct on 14, wrong on 58)
 - 4 Blocks: 35/35 "static" (correct on 19, wrong on 16)
 
-VLM can't see motion from frames. **Even GPT-4V with 4 frames per shot got
-55% accuracy** in our test. OpenCV optical flow got 85% on the same shots.
+VLM can't see motion from frames. *(Round 8 correction: an earlier version
+claimed "GPT-4V 55% vs OpenCV 85% accuracy". No human-labelled ground truth
+existed, and the OpenCV classifier turned out to have inverted signs — those
+numbers are withdrawn. Accuracy will be measured against the gold set.)*
 
 ### Alternatives
 

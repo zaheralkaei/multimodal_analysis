@@ -36,3 +36,6 @@ INSTRUMENT_TAGS = [
     "vocal only no instruments",
 ]
 ALL_TAGS = MOOD_TAGS + SECTION_TAGS + INSTRUMENT_TAGS
+
+# Probabilities are normalized WITHIN each group (phase 5, round 8).
+TAG_GROUPS = {"mood": MOOD_TAGS, "section": SECTION_TAGS, "instrument": INSTRUMENT_TAGS}

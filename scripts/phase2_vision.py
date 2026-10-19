@@ -77,7 +77,21 @@ JSON_INSTRUCTION = """Respond with ONLY a JSON object in this exact schema:
 }
 Do not add any text before or after the JSON. No markdown code fences."""
 
-STOP_SEQUENCES = ["\n\n", "###", "Question:", "---"]
+# No "\n\n" stop: a pretty-printed JSON object may legally contain a blank
+# line and would be truncated mid-object.
+STOP_SEQUENCES = ["###", "Question:"]
+
+# Retry policy for transient API failures (rate limits / gateway errors).
+RETRY_STATUS = {408, 429, 500, 502, 503, 504}
+MAX_RETRIES = 4
+
+# Running token/cost account for the whole phase (filled from API `usage`).
+USAGE = {"prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0, "retries": 0}
+
+# Conservative per-call token estimate for the pre-run cost guard. Image
+# tokens vary by model and resolution (Gemma ~256-ish, Qwen-VL ~1k at 720p).
+EST_IMAGE_TOKENS = 1500
+EST_OUTPUT_TOKENS = 300
 
 
 def build_combined_prompt() -> str:
@@ -92,7 +106,8 @@ COMBINED_PROMPT = build_combined_prompt()
 
 
 def resolve_provider(provider: str) -> str:
-    """auto → openrouter if OPENROUTER_API_KEY set, else ollama."""
+    """auto → openrouter if OPENROUTER_API_KEY set, else ollama.
+    'mock' is an offline stand-in for end-to-end tests (never real data)."""
     if provider != "auto":
         return provider
     if os.environ.get("OPENROUTER_API_KEY"):
@@ -104,12 +119,43 @@ def endpoint_for(provider: str) -> str:
     """Human-readable endpoint identifier for logs and stats."""
     if provider == "openrouter":
         return os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    if provider == "mock":
+        return "offline-mock"
     base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
     return base
 
 
+def _urlopen_with_retry(req, timeout: int):
+    """urlopen + exponential backoff on 408/429/5xx and network errors."""
+    import urllib.error, urllib.request
+    delay = 2.0
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code not in RETRY_STATUS or attempt == MAX_RETRIES:
+                body = ""
+                try:
+                    body = e.read().decode(errors="replace")[:300]
+                except Exception:
+                    pass
+                raise RuntimeError(f"HTTP {e.code}: {body}") from None
+            retry_after = e.headers.get("Retry-After") if e.headers else None
+            wait = float(retry_after) if retry_after and retry_after.isdigit() else delay
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            if attempt == MAX_RETRIES:
+                raise
+            wait = delay
+        USAGE["retries"] += 1
+        print(f"  [retry {attempt + 1}/{MAX_RETRIES}] waiting {wait:.0f}s", flush=True)
+        time.sleep(wait)
+        delay = min(delay * 2, 60)
+
+
 def call_openrouter(model: str, prompt: str, image_b64: str, timeout: int = 180,
-                    seed: int = 42, num_predict: int = 1500) -> tuple[str, float]:
+                    seed: int = 42, num_predict: int = 1500,
+                    json_mode: bool = True) -> tuple[str, float]:
     """OpenRouter (OpenAI-compatible) chat completion with one image."""
     import urllib.request
     url = os.environ.get("OPENROUTER_BASE_URL",
@@ -131,7 +177,11 @@ def call_openrouter(model: str, prompt: str, image_b64: str, timeout: int = 180,
         "seed": seed,
         "max_tokens": num_predict,
         "stop": STOP_SEQUENCES,
+        # report token usage + cost in the response (for the cost account)
+        "usage": {"include": True},
     }
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
@@ -141,12 +191,15 @@ def call_openrouter(model: str, prompt: str, image_b64: str, timeout: int = 180,
     }
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers)
     t0 = time.time()
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        result = json.loads(r.read())
+    result = _urlopen_with_retry(req, timeout)
     try:
         text = result["choices"][0]["message"]["content"] or ""
     except (KeyError, IndexError, TypeError):
         raise RuntimeError(f"unexpected OpenRouter response shape: {result}") from None
+    usage = result.get("usage") or {}
+    USAGE["prompt_tokens"] += int(usage.get("prompt_tokens") or 0)
+    USAGE["completion_tokens"] += int(usage.get("completion_tokens") or 0)
+    USAGE["cost_usd"] += float(usage.get("cost") or 0.0)
     return text.strip(), time.time() - t0
 
 
@@ -176,14 +229,37 @@ def call_ollama(model: str, prompt: str, image_b64: str, timeout: int = 120,
     }
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers)
     t0 = time.time()
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        result = json.loads(r.read())
+    result = _urlopen_with_retry(req, timeout)
     return result.get("response", "").strip(), time.time() - t0
+
+
+def call_mock(prompt: str, image_b64: str) -> tuple[str, float]:
+    """Deterministic offline stand-in: derives a fake answer from the image
+    bytes so the whole pipeline can be exercised without any API call.
+    Output is clearly labelled MOCK and must never be used as data."""
+    import hashlib
+    if "ready" in prompt.lower() and len(prompt) < 80:
+        return "ready", 0.0
+    h = int(hashlib.sha256(image_b64.encode()).hexdigest(), 16)
+    emotions = ["joyful", "neutral", "intense", "melancholic", "confident"]
+    data = {
+        "caption": f"MOCK caption #{h % 1000} (offline test, not a model output)",
+        "camera": "unknown",
+        "emotion": emotions[h % len(emotions)],
+        "colors": "mock red, mock blue, mock white",
+        "entities": "mock person",
+        "location": "MOCK location",
+        "lighting": "MOCK lighting",
+        "composition": "MOCK composition",
+    }
+    return json.dumps(data), 0.0
 
 
 def call_llm(provider: str, model: str, prompt: str, image_b64: str,
              timeout: int = 120, seed: int = 42, num_predict: int = 1500) -> tuple[str, float]:
     """Dispatch to the configured backend."""
+    if provider == "mock":
+        return call_mock(prompt, image_b64)
     if provider == "openrouter":
         return call_openrouter(model, prompt, image_b64, timeout=timeout, seed=seed,
                                num_predict=num_predict)
@@ -228,8 +304,66 @@ def parse_json_response(raw: str) -> dict:
     return cleaned
 
 
+def _reusable(row: dict, mid_rel: str, model: str) -> bool:
+    """Keep a previously analyzed row only if it is still valid: same
+    mid-frame, same model (rows from before the model column are accepted),
+    and not an error/parse-error/budget/mock row."""
+    if row.get("mid_frame") != mid_rel:
+        return False
+    if row.get("model") and row.get("model") != model:
+        return False
+    if row.get("status") in ("error", "parse_error", "budget", "mock"):
+        return False
+    cap = row.get("caption", "")
+    if cap.startswith("[error") or cap.startswith("[parse_error"):
+        return False
+    return True
+
+
+def estimate_cost(n_calls: int, pricing: dict | None) -> float | None:
+    """Upper-bound USD estimate from OpenRouter per-token pricing."""
+    if not pricing:
+        return None
+    p_in = float(pricing.get("prompt") or 0)
+    p_out = float(pricing.get("completion") or 0)
+    p_img = float(pricing.get("image") or 0)
+    prompt_tokens = len(COMBINED_PROMPT) // 3 + EST_IMAGE_TOKENS
+    per_call = prompt_tokens * p_in + EST_OUTPUT_TOKENS * p_out + p_img
+    return n_calls * per_call
+
+
+def fetch_openrouter_pricing(model: str, timeout: int = 20) -> dict | None:
+    """Public model list (no key, no cost). Returns the model's pricing dict,
+    {} if the model slug does not exist, None if offline."""
+    import urllib.request
+    base = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
+    try:
+        with urllib.request.urlopen(f"{base}/models", timeout=timeout) as r:
+            data = json.loads(r.read()).get("data", [])
+    except Exception as e:
+        print(f"[warn] could not fetch OpenRouter model list: {e}")
+        return None
+    for m in data:
+        if m.get("id") == model:
+            return m.get("pricing") or {}
+    return {}
+
+
+def _count_pending(shots: list[dict], out_csv: Path, model: str) -> int:
+    existing: dict[int, dict] = {}
+    if out_csv.exists():
+        with out_csv.open(encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                try:
+                    existing[int(r["shot_idx"])] = r
+                except (ValueError, KeyError):
+                    pass
+    return sum(1 for i, s in enumerate(shots)
+               if not (i in existing and _reusable(existing[i], s.get("mid_frame_path", ""), model)))
+
+
 def analyze_shots(provider: str, model: str, shots: list[dict], frames_dir: Path,
-                  out_csv: Path) -> tuple[list[dict], dict]:
+                  out_csv: Path, max_usd: float | None = None) -> tuple[list[dict], dict]:
     """For each shot, ask the combined JSON-mode prompt once. Saves incrementally."""
     rows = []
     stats = {"calls": 0, "errors": 0, "parse_errors": 0, "total_seconds": 0.0, "skipped": []}
@@ -248,7 +382,8 @@ def analyze_shots(provider: str, model: str, shots: list[dict], frames_dir: Path
         if existing:
             print(f"[info] resuming from existing CSV: {len(existing)} shots already done")
 
-    cols = ["shot_idx", "start_sec", "end_sec", "duration_sec", "mid_frame"] + [q[0] for q in QUESTIONS]
+    cols = (["shot_idx", "start_sec", "end_sec", "duration_sec", "mid_frame"]
+            + [q[0] for q in QUESTIONS] + ["status", "model"])
 
     with out_csv.open("w", encoding="utf-8", newline="") as f_out:
         writer = csv.DictWriter(f_out, fieldnames=cols)
@@ -256,7 +391,8 @@ def analyze_shots(provider: str, model: str, shots: list[dict], frames_dir: Path
         for i, shot in enumerate(shots):
             mid_rel = shot.get("mid_frame_path", "")
             stale_row = existing.get(i)
-            if stale_row is not None and stale_row.get("mid_frame") == mid_rel:
+            if stale_row is not None and _reusable(stale_row, mid_rel, model):
+                stale_row = {k: v for k, v in stale_row.items() if k in cols}
                 rows.append(stale_row)
                 writer.writerow(stale_row)
                 continue
@@ -272,14 +408,24 @@ def analyze_shots(provider: str, model: str, shots: list[dict], frames_dir: Path
                 "end_sec": shot["end_sec"],
                 "duration_sec": shot["duration_sec"],
                 "mid_frame": mid_rel,
+                "model": model,
             }
+            if max_usd is not None and USAGE["cost_usd"] >= max_usd:
+                row["caption"] = f"[error: budget {max_usd:.2f} USD reached]"
+                row["status"] = "budget"
+                stats["errors"] += 1
+                rows.append(row)
+                writer.writerow(row)
+                continue
             try:
                 raw, secs = call_llm(provider, model, COMBINED_PROMPT, b64)
                 parsed = parse_json_response(raw)
                 if "_parse_error" in parsed:
                     row["caption"] = f"[parse_error: {parsed['_parse_error']}]"
+                    row["status"] = "parse_error"
                     stats["parse_errors"] += 1
                 else:
+                    row["status"] = "mock" if provider == "mock" else "ok"
                     for qname, _ in QUESTIONS:
                         v = parsed.get(qname, "")
                         if qname == "emotion" and NORMALIZE_EMOTIONS and v:
@@ -289,6 +435,7 @@ def analyze_shots(provider: str, model: str, shots: list[dict], frames_dir: Path
                 stats["total_seconds"] += secs
             except Exception as e:
                 row["caption"] = f"[error: {e}]"
+                row["status"] = "error"
                 stats["errors"] += 1
             rows.append(row)
             writer.writerow(row)
@@ -308,19 +455,29 @@ def main() -> int:
                         help=f"Vision model name (default: {default_model}). "
                              "OpenRouter example: google/gemma-4-31b-it; "
                              "Ollama examples: gemma3:27b, gemma3:4b (local).")
-    parser.add_argument("--provider", default="auto", choices=["auto", "openrouter", "ollama"],
-                        help="Backend (default: auto — OpenRouter if OPENROUTER_API_KEY set, else Ollama)")
+    parser.add_argument("--provider", default="auto", choices=["auto", "openrouter", "ollama", "mock"],
+                        help="Backend (default: auto — OpenRouter if OPENROUTER_API_KEY set, else Ollama; "
+                             "mock = offline fake answers for testing the pipeline, never real data)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Count calls, check the model slug and estimate cost; make NO paid calls")
+    parser.add_argument("--max-usd", type=float,
+                        default=float(os.environ.get("VISION_MAX_USD", "1.0")),
+                        help="Abort before starting if the estimate exceeds this, and stop calling "
+                             "once reported spend reaches it (default 1.0, env VISION_MAX_USD)")
     args = parser.parse_args()
 
     provider = resolve_provider(args.provider)
     endpoint = endpoint_for(provider)
     has_key = bool(os.environ.get("OPENROUTER_API_KEY") if provider == "openrouter"
                    else os.environ.get("OLLAMA_API_KEY"))
+    if provider == "mock":
+        print("[warn] MOCK provider: captions are fake and marked as such — "
+              "for pipeline testing only, never for analysis")
     print(f"[info] provider: {provider}")
     print(f"[info] endpoint: {endpoint}")
     print(f"[info] auth: {'bearer token' if has_key else 'no auth (local)'}")
     print(f"[info] model: {args.model}")
-    if provider == "openrouter" and not has_key:
+    if provider == "openrouter" and not has_key and not args.dry_run:
         print("[error] OPENROUTER_API_KEY is not set. Add it to .env (see .env.example).")
         return 1
 
@@ -332,6 +489,27 @@ def main() -> int:
 
     shots = json.loads(shots_path.read_text(encoding="utf-8"))
     print(f"[info] loaded {len(shots)} shots", flush=True)
+
+    out_csv = PROCESSED / "shot_vision.csv"
+    n_todo = _count_pending(shots, out_csv, args.model)
+    print(f"[info] {n_todo} of {len(shots)} shots need a model call "
+          f"(the rest are reusable from {disp(out_csv)})")
+    if provider == "openrouter":
+        pricing = fetch_openrouter_pricing(args.model)
+        if pricing == {}:
+            print(f"[error] model '{args.model}' is not listed on OpenRouter — check the slug")
+            return 1
+        est = estimate_cost(n_todo + 1, pricing)
+        if est is not None:
+            print(f"[cost] estimated upper bound: ${est:.3f} for {n_todo} calls "
+                  f"(budget --max-usd {args.max_usd:.2f})")
+            if est > args.max_usd:
+                print("[error] estimate exceeds budget; raise --max-usd to proceed")
+                return 1
+    if args.dry_run:
+        print("[dry-run] no model calls made. Prompt that would be sent per shot:\n"
+              + COMBINED_PROMPT)
+        return 0
 
     # Quick health check
     print(f"[info] testing model ...", flush=True)
@@ -358,8 +536,8 @@ def main() -> int:
 
     print(f"\n[info] analyzing {len(shots)} shots with combined JSON prompt = "
           f"{len(shots)} total calls", flush=True)
-    out_csv = PROCESSED / "shot_vision.csv"
-    rows, stats = analyze_shots(provider, args.model, shots, PROCESSED / "frames", out_csv)
+    rows, stats = analyze_shots(provider, args.model, shots, PROCESSED / "frames", out_csv,
+                                max_usd=args.max_usd if provider == "openrouter" else None)
 
     # Persist what was ACTUALLY used — phases 7/8 read this (AUDIT_R4 F4)
     stats.update({
@@ -367,6 +545,11 @@ def main() -> int:
         "model": args.model,
         "endpoint": endpoint,
         "n_shots": len(shots),
+        "usage": dict(USAGE),
+        "is_mock": provider == "mock",
+        "prompt": COMBINED_PROMPT,
+        "temperature": 0,
+        "seed": 42,
         "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
     })
     stats_path = PROCESSED / "shot_vision_stats.json"
@@ -377,6 +560,10 @@ def main() -> int:
           f"{stats['errors']} errors)")
     if stats["skipped"]:
         print(f"[warn] shots skipped (missing mid-frame): {stats['skipped']}")
+    if USAGE["cost_usd"] or USAGE["prompt_tokens"]:
+        print(f"[cost] reported spend ${USAGE['cost_usd']:.4f} "
+              f"({USAGE['prompt_tokens']} in / {USAGE['completion_tokens']} out tokens, "
+              f"{USAGE['retries']} retries)")
     print(f"[stats] total time: {stats['total_seconds']:.0f}s "
           f"({stats['total_seconds']/60:.1f} min, "
           f"avg {stats['total_seconds']/max(1,stats['calls']):.1f}s/call)")

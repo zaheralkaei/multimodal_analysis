@@ -112,5 +112,6 @@ class TestPhase0Staging:
             stdout = ffprobe_json
 
         monkeypatch.setattr("subprocess.run", lambda *a, **k: FakeOut())
+        monkeypatch.setattr(phase0, "ffprobe_exe", lambda: "ffprobe")
         meta = phase0.extract_metadata(Path("fake.mp4"))
         assert abs(meta["video"]["fps"] - 29.97002997002997) < 1e-6

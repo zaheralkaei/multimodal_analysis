@@ -230,6 +230,8 @@ def main() -> int:
 
     # Vision model provenance — what ACTUALLY ran (AUDIT_R4 F4; never hardcode)
     vision_model_name = stats.get("vision_model", "unknown (phase 2 stats missing)")
+    if str(stats.get("vision_provider", "")).lower() == "mock":
+        vision_model_name = "MOCK (offline test - no model was called)"
 
     # ===== Video identity & source deep-links (UI audit U1/U2) =====
     video_id = PROCESSED.name
@@ -413,7 +415,7 @@ def main() -> int:
         hole=0.4, textinfo="label+percent",
     )])
     fig_cam.update_layout(
-        title="Camera motion distribution (OpenCV optical flow)",
+        title="Camera motion distribution (feature tracking + RANSAC global motion)",
         template="plotly_white",
     )
     cam_dist_html = fig_cam.to_html(include_plotlyjs=False, full_html=False, div_id="chart_camera")
@@ -431,14 +433,14 @@ def main() -> int:
     vlm_cam_html += "<tr><th style='padding:6px 12px;background:#eee;'>Source</th><th style='padding:6px 12px;background:#eee;'>Method</th><th style='padding:6px 12px;background:#eee;'>Top motion</th><th style='padding:6px 12px;background:#eee;'>Shot count</th></tr>"
     # OpenCV row
     top_opencv = cam_counts.most_common(1)[0] if cam_counts else ("?", 0)
-    vlm_cam_html += f"<tr><td style='padding:6px 12px;'><b>OpenCV</b></td><td style='padding:6px 12px;'>optical flow over shot frames</td><td style='padding:6px 12px;'>{html_lib.escape(str(top_opencv[0]))}</td><td style='padding:6px 12px;'>{top_opencv[1]} ({100*top_opencv[1]/max(1, n_shots):.0f}%)</td></tr>"
+    vlm_cam_html += f"<tr><td style='padding:6px 12px;'><b>Geometric (phase 3)</b></td><td style='padding:6px 12px;'>KLT tracks + RANSAC similarity at 8 fps</td><td style='padding:6px 12px;'>{html_lib.escape(str(top_opencv[0]))}</td><td style='padding:6px 12px;'>{top_opencv[1]} ({100*top_opencv[1]/max(1, n_shots):.0f}%)</td></tr>"
     # VLM row
     top_vlm = vlm_counts.most_common(1)[0] if vlm_counts else ("?", 0)
     vlm_cam_html += f"<tr><td style='padding:6px 12px;'>{html_lib.escape(vision_model_name)}</td><td style='padding:6px 12px;'>single mid-frame per shot</td><td style='padding:6px 12px;'>{html_lib.escape(str(top_vlm[0]))}</td><td style='padding:6px 12px;'>{top_vlm[1]} ({100*top_vlm[1]/max(1, n_shots):.0f}%)</td></tr>"
     # Agreement row
     vlm_cam_html += f"<tr><td style='padding:6px 12px;'><b>Agreement</b></td><td style='padding:6px 12px;'>shot-level exact-match</td><td style='padding:6px 12px;'>-</td><td style='padding:6px 12px;'>{agreement_count}/{n_shots} = <b>{agreement_pct}%</b></td></tr>"
     vlm_cam_html += "</table>"
-    vlm_cam_html += "<p style='font-size:11px;color:#666;margin-top:4px;'>The mid-frame alone cannot show camera motion (the VLM sees 1 instant). OpenCV optical flow sees every extracted frame in the shot and is genuinely better at detecting pan/tilt/zoom. The VLM still helps with semantic understanding (what the subject is doing). Both signals are kept separately in <code>sync_per_shot.csv</code> as <code>camera_motion</code> and <code>vision_camera_from_vlm</code>.</p>"
+    vlm_cam_html += "<p style='font-size:11px;color:#666;margin-top:4px;'>Agreement between two methods is <b>not accuracy</b> — neither source has been validated against human labels yet. The VLM sees one mid-frame and cannot observe motion, so its camera answer is expected to be mostly \"static\". The geometric estimate separates camera motion from moving subjects (RANSAC outliers) but its thresholds are provisional. Both are kept in <code>sync_per_shot.csv</code> (<code>camera_motion</code>, <code>vision_camera_from_vlm</code>, plus the continuous <code>camera_*_rate</code> columns).</p>"
 
     # ===== Chart 4: Audio mood averages =====
     clap_tags_present = [t for t in MOOD_TAGS if clap and t in clap[0]]
@@ -605,8 +607,20 @@ def main() -> int:
                        f"max <b>{shot_stats.get('max_shot_duration_sec', '?'):.1f}s</b>.</li>")
     has_music_sig = bool(music_summary.get("tempo_bpm")) and bool(music_summary.get("n_beats"))
     if stats.get("cuts_on_beat") is not None and n_shots > 0 and has_music_sig:
-        findings.append(f"<li><b>{stats['cuts_on_beat']}/{stats['total_shots']} cuts</b> on a beat "
-                       f"({stats['cuts_on_beat_pct']}%) — within 100ms tolerance.</li>")
+        al = stats.get("cut_beat_alignment") or {}
+        n_cuts = stats.get("total_cuts", stats.get("total_shots"))
+        if al.get("chance_rate") is not None:
+            verdict = ("<b>more than chance</b>" if al.get("significant")
+                       else "<b>not distinguishable from chance</b>")
+            findings.append(
+                f"<li><b>{stats['cuts_on_beat']}/{n_cuts} cuts</b> land within ±100 ms of a beat "
+                f"({stats['cuts_on_beat_pct']}%). Random cutting would score "
+                f"{al['chance_rate'] * 100:.0f}% ± {al['chance_sd'] * 100:.0f} — {verdict} "
+                f"(exact per-cut chance model, p = {al.get('p_value'):.3g}).</li>")
+        else:
+            findings.append(f"<li><b>{stats['cuts_on_beat']}/{n_cuts} cuts</b> on a beat "
+                           f"({stats['cuts_on_beat_pct']}%) — no chance baseline available "
+                           f"(re-run phase 7).</li>")
     if content_type in ("speech", "vlog") and transcript:
         talk_chars = sum(len(t.get("text", "")) for t in transcript)
         talk_dur = sum(max(0.0, float(t["end_sec"]) - float(t["start_sec"])) for t in transcript)
@@ -641,9 +655,18 @@ def main() -> int:
     dq_items.append(("Frame extraction", f"{n_frames_extracted} frames at {extracted_fps} fps (video native: {round(float(video_fps), 1) if video_fps != '?' else '?'} fps)"))
     dq_items.append(("Shot detection", f"✓ {n_shots} shots from PySceneDetect-ContentDetector (threshold={shot_stats.get('threshold', '?')}, min_scene_len={shot_stats.get('min_scene_len_frames', '?')} frames)"))
     dq_items.append(("Vision captions", f"✓ {len([s for s in shots if s.get('vision_caption') and '[error' not in s.get('vision_caption', '')])}/{n_shots} shots have captions (vision model: {safe_model})"))
-    dq_items.append(("Camera motion", f"✓ {len([s for s in shots if s.get('camera_motion')])}/{n_shots} shots classified"))
-    dq_items.append(("Transcription", f"{'✓' if transcript else '⚠'} {len(transcript)} segments ({stats.get('total_lyric_chars', 0)} chars)"))
+    n_cam_known = len([s for s in shots if s.get("camera_motion") and s.get("camera_motion") != "unknown"])
+    n_cam_unknown = len([s for s in shots if s.get("camera_motion") == "unknown"])
+    dq_items.append(("Camera motion", f"{'✓' if n_cam_known else '⚠'} {n_cam_known}/{n_shots} shots classified"
+                                      + (f"; {n_cam_unknown} unknown (too dark/blurred/low-texture, or no consistent background motion)"
+                                         if n_cam_unknown else "")))
+    n_suspect = stats.get("suspect_transcript_segments_excluded", 0) or 0
+    dq_items.append(("Transcription", f"{'✓' if transcript else '⚠'} {len(transcript)} segments ({stats.get('total_lyric_chars', 0)} chars counted"
+                                      + (f"; {n_suspect} flagged as likely hallucination and excluded" if n_suspect else "") + ")"))
     dq_items.append(("CLAP audio", f"{'✓' if clap else '⚠'} {len(clap)} 5s windows × {len(MOOD_TAGS)} mood tags"))
+    dropped = stats.get("misaligned_rows_dropped") or {}
+    if any(dropped.values()):
+        dq_items.append(("Stale rows", f"⚠ dropped per-shot rows that no longer match shots.json: {dropped} — re-run those phases"))
     dq_items.append(("Music structure", f"{'✓' if music_summary else '⚠'} {music_summary.get('n_beats', 0)} beats, {music_summary.get('tempo_bpm', '?')} BPM"))
     dq_html = "<table border='1' style='border-collapse:collapse;font-family:monospace;'>"
     for label, status in dq_items:
@@ -655,18 +678,25 @@ def main() -> int:
     # items (CLAP / cut-on-beat / key) only when a music signal exists.
     caveat_lines = [
         f"<li><b>Visual analysis</b> uses <code>{safe_model}</code>. The model \"sees\" one mid-frame per shot and answers 8 questions. Quality depends on the chosen mid-frame.</li>",
-        "<li><b>Shot detection</b> uses PySceneDetect's ContentDetector (HSV color delta + edge detection). Detects both hard cuts and gradual transitions. False positives possible in compression artifacts.</li>",
-        f"<li><b>Camera motion</b> is computed via OpenCV optical flow between consecutive frames within each shot (at {extracted_fps} fps → {round(1 / extracted_fps, 2) if isinstance(extracted_fps, (int, float)) and extracted_fps else '?'}s time resolution). Coarser than a human labeler but consistent. At lower fps, the optical flow algorithm tends to over-classify zoom-in because frames 1s+ apart often have apparent radial divergence.</li>",
+        "<li><b>Shot detection</b> uses PySceneDetect's ContentDetector (HSV color delta + edge detection). Reliable on hard cuts; slow dissolves/fades may be missed or merged, and flashes can cause false cuts. Not yet scored against human labels.</li>",
+        "<li><b>Camera motion</b> is estimated from feature tracks sampled at 8 fps inside each shot (cut frames excluded); a RANSAC similarity fit separates the dominant background motion (camera) from moving subjects. Zoom and dolly cannot be told apart. A subject filling most of the frame can be mistaken for background. Thresholds are provisional until calibrated on hand labels; the continuous rates are in the CSV.</li>",
         f"<li><b>Content type: {content_type}</b> ({'explicitly set' if profile.get('confidence') is None else 'auto-detected'}). Rules are ordered and heuristic; a wrong auto-detection here is visible in its reasons, and can be overridden with <code>--content-type</code>.</li>",
     ]
     if transcript:
         caveat_lines.append("<li><b>Transcription</b> uses faster-whisper. Trained on speech, not music. On heavily reverbed or whispered vocals, expect gaps or mistakes.</li>")
     if clap:
-        caveat_lines.append("<li><b>CLAP similarity</b>: 0-1 probability per tag. High score = audio is <i>similar to</i> the tag, not that it <i>is</i> the tag.</li>")
+        caveat_lines.append("<li><b>CLAP similarity</b>: probabilities are normalized within each tag group (mood / section / instrument), so they rank tags against each other — a high score means the audio is <i>more similar to</i> that tag than to the others, not that it <i>is</i> the tag. Raw cosine similarities are in <code>audio_clap_cosine.csv</code>.</li>")
     if has_music_sig:
-        caveat_lines.append(f"<li><b>\"Cut on beat\"</b>: shot start is within ±100ms of a detected beat. {stats.get('cuts_on_beat_pct', 0)}% for this video; compare across videos for genre-level patterns.</li>")
+        caveat_lines.append(f"<li><b>\"Cut on beat\"</b>: a cut (shot 0 excluded) within ±100 ms of a detected beat. At typical pop tempi a random cut already lands on a beat ~40% of the time, so the rate is always reported against its chance level: under the null each cut's position within its beat interval is uniform (exact Poisson-binomial p-value, local beat periods). Beats come from librosa (no downbeats), so beat-tracking errors propagate.</li>")
         caveat_lines.append("<li><b>Key detection</b> uses Krumhansl-Schmuckler template matching on chroma. Works for most popular music; fails on atonal tracks.</li>")
     caveats = "<ul>" + "".join(caveat_lines) + "</ul>"
+
+    mock_banner = ""
+    if str(stats.get("vision_provider", "")).lower() == "mock":
+        mock_banner = ("<p style='background:#fde0dc;border-left:6px solid #c62828;padding:12px 16px;"
+                       "font-weight:bold;'>TEST RUN — vision answers are OFFLINE MOCK DATA "
+                       "(phase 2 --provider mock). Captions, emotions, colors, locations are fake. "
+                       "Do not use this report for analysis.</p>")
 
     # ===== Build full HTML =====
     # Dynamic timeline description — matches the tracks actually drawn
@@ -705,6 +735,7 @@ def main() -> int:
 <body>
 
 <h1>{html_lib.escape(video_id)} — multimodal video analysis</h1>
+{mock_banner}
 <p style="background:#e8f4f8; padding:10px 16px; border-left:4px solid #2c7fb8; margin: 16px 0;">
   <b>Video:</b> {html_lib.escape(video_id)}
   {f'<a href="{html_lib.escape(source_url)}" target="_blank" rel="noopener">&#9654; open source video</a>' if source_url else ''}

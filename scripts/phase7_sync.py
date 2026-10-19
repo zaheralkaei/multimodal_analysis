@@ -15,6 +15,18 @@ Writes:
   data/<video_id>/sync_per_shot.csv — joined table per shot
   data/<video_id>/sync_stats.json — derived cross-modal signals + vision model
 
+Round 8 (analysis validity):
+  - Shot 0 starts at t=0 — that is not an edit; it is excluded from cut
+    statistics (cut_on_beat is blank for it).
+  - cut-on-beat is reported WITH its chance level: circular-shift null
+    model + Rayleigh test on beat phase (scripts/_stats.py). Before, the bare
+    percentage (~45 %) was indistinguishable from random cutting.
+  - Vision/camera rows are joined only when their start_sec matches the
+    shot (stale CSVs from an earlier phase-1 run no longer attach to the
+    wrong shot). Mismatches are counted in sync_stats.json.
+  - Transcript segments flagged `suspect` by phase 4 are excluded from
+    lyric counts/text.
+
 Cross-modal signals computed:
   - cut_on_beat: did this shot's start coincide with a beat (within 100ms)?
   - avg_audio_mood_for_shot: mean CLAP mood tag probabilities across shot duration
@@ -45,6 +57,25 @@ def within_tolerance(a: float, b: float, tol: float) -> bool:
     return abs(a - b) <= tol
 
 
+BEAT_TOLERANCE_SEC = 0.1
+
+
+def _aligned(row: dict, start: float) -> bool:
+    """A per-shot row belongs to this shot if its start time matches (rows
+    without a start_sec column are accepted for backward compatibility)."""
+    v = row.get("start_sec", "")
+    if v in ("", None):
+        return True
+    try:
+        return abs(float(v) - start) < 0.02
+    except ValueError:
+        return False
+
+
+def _is_suspect(seg: dict) -> bool:
+    return str(seg.get("suspect", "")).strip().lower() in ("true", "1", "yes")
+
+
 def join_data(shots: list[dict], vision: list[dict], camera: list[dict],
               transcript: list[dict], clap: list[dict],
               music: list[dict], beats: list[float],
@@ -53,6 +84,8 @@ def join_data(shots: list[dict], vision: list[dict], camera: list[dict],
     rows = []
     cut_on_beat_count = 0
     total_cuts = 0
+    misaligned = {"vision": 0, "camera": 0}
+    usable_transcript = [r for r in transcript if not _is_suspect(r)]
 
     # Index by shot_idx for fast lookup
     vision_by_shot = {int(r["shot_idx"]): r for r in vision}
@@ -63,6 +96,12 @@ def join_data(shots: list[dict], vision: list[dict], camera: list[dict],
         e = float(shot["end_sec"])
         v = vision_by_shot.get(i, {})
         c = camera_by_shot.get(i, {})
+        if v and not _aligned(v, s):
+            misaligned["vision"] += 1
+            v = {}
+        if c and not _aligned(c, s):
+            misaligned["camera"] += 1
+            c = {}
 
         # CLAP: mean probability across windows in [s, e]
         clap_in_shot = [r for r in clap if float(r["start_sec"]) < e and float(r["end_sec"]) > s]
@@ -82,14 +121,17 @@ def join_data(shots: list[dict], vision: list[dict], camera: list[dict],
         beats_in_shot = sum(int(r.get("n_beats", 0)) for r in music_in_shot)
 
         # Transcript: count segments overlapping
-        lyrics_in_shot = [r for r in transcript if float(r["start_sec"]) < e and float(r["end_sec"]) > s and r.get("text", "").strip()]
+        lyrics_in_shot = [r for r in usable_transcript if float(r["start_sec"]) < e and float(r["end_sec"]) > s and r.get("text", "").strip()]
         lyric_text = " | ".join(r["text"] for r in lyrics_in_shot)[:300]
 
-        # Cut on beat?
-        total_cuts += 1
-        is_cut_on_beat = any(within_tolerance(s, b, 0.1) for b in beats)
-        if is_cut_on_beat:
-            cut_on_beat_count += 1
+        # Cut on beat? (shot 0 starts the video — not a cut)
+        if i == 0:
+            is_cut_on_beat = ""
+        else:
+            total_cuts += 1
+            is_cut_on_beat = any(within_tolerance(s, b, BEAT_TOLERANCE_SEC) for b in beats)
+            if is_cut_on_beat:
+                cut_on_beat_count += 1
 
         rows.append({
             "shot_idx": i,
@@ -108,9 +150,16 @@ def join_data(shots: list[dict], vision: list[dict], camera: list[dict],
             "mid_frame": v.get("mid_frame", ""),  # propagate for dashboard thumbnails
             # Camera (from Phase 3)
             "camera_motion": c.get("camera_motion", ""),
-            "camera_pan_score": c.get("pan_score_mean", ""),
-            "camera_tilt_score": c.get("tilt_score_mean", ""),
-            "camera_zoom_score": c.get("zoom_score_mean", ""),
+            "camera_pan_score": c.get("pan_rate", c.get("pan_score_mean", "")),
+            "camera_tilt_score": c.get("tilt_rate", c.get("tilt_score_mean", "")),
+            "camera_zoom_score": c.get("zoom_rate", c.get("zoom_score_mean", "")),
+            "camera_pan_rate": c.get("pan_rate", ""),
+            "camera_tilt_rate": c.get("tilt_rate", ""),
+            "camera_zoom_rate": c.get("zoom_rate", ""),
+            "camera_shake": c.get("shake", ""),
+            "camera_confidence": c.get("camera_confidence", ""),
+            "camera_components": c.get("camera_components", ""),
+            "camera_subject_motion_share": c.get("subject_motion_share", ""),
             # Audio (from Phase 5)
             "audio_top_mood": top_mood,
             **{f"audio_mood_{k}": avg_clap[k] for k in mood_tags},
@@ -124,16 +173,24 @@ def join_data(shots: list[dict], vision: list[dict], camera: list[dict],
         })
 
     # Stats
+    from _stats import beat_alignment
+    cut_times = [float(sh["start_sec"]) for sh in shots[1:]]
+    duration = float(shots[-1]["end_sec"]) if shots else 0.0
+    alignment = beat_alignment(cut_times, beats, duration, tol=BEAT_TOLERANCE_SEC)
     stats = {
-        "total_shots": total_cuts,
+        "total_shots": len(shots),
+        "total_cuts": total_cuts,
         "cuts_on_beat": cut_on_beat_count,
         "cuts_on_beat_pct": round(cut_on_beat_count / max(1, total_cuts) * 100, 1),
+        "cut_beat_alignment": alignment,
+        "misaligned_rows_dropped": misaligned,
+        "suspect_transcript_segments_excluded": len(transcript) - len(usable_transcript),
         "shots_with_lyrics": sum(1 for r in rows if r["n_lyric_segments"] > 0),
         "shots_with_lyrics_pct": round(
             sum(1 for r in rows if r["n_lyric_segments"] > 0) / max(1, len(rows)) * 100, 1
         ),
-        "total_lyric_segments": len(transcript),
-        "total_lyric_chars": sum(len(r.get("text", "")) for r in transcript),
+        "total_lyric_segments": len(usable_transcript),
+        "total_lyric_chars": sum(len(r.get("text", "")) for r in usable_transcript),
         "avg_music_rms": round(sum(float(r.get("music_avg_rms", 0)) for r in rows) / max(1, len(rows)), 5),
         "clap_mood_tags": mood_tags,
     }
@@ -195,7 +252,18 @@ def main() -> int:
     print(f"[ok] wrote {disp(out_json)}")
 
     print(f"\n[stats]")
-    print(f"  {stats['cuts_on_beat']}/{stats['total_shots']} shots cut on a beat ({stats['cuts_on_beat_pct']}%)")
+    al = stats["cut_beat_alignment"]
+    if al.get("chance_rate") is None:
+        print(f"  {stats['cuts_on_beat']}/{stats['total_cuts']} cuts on a beat "
+              f"({stats['cuts_on_beat_pct']}%); no chance test ({al.get('note', 'no beats')})")
+    else:
+        print(f"  {stats['cuts_on_beat']}/{stats['total_cuts']} cuts on a beat ({stats['cuts_on_beat_pct']}%); "
+              f"chance {al['chance_rate'] * 100:.1f}% ± {al['chance_sd'] * 100:.1f}, "
+              f"p = {al['p_value']:.4g}"
+              f"{'  (significant)' if al.get('significant') else '  (not distinguishable from chance)'}")
+    if any(stats["misaligned_rows_dropped"].values()):
+        print(f"  [warn] dropped stale per-shot rows: {stats['misaligned_rows_dropped']} "
+              "— re-run the phase that produced them")
     print(f"  {stats['shots_with_lyrics']}/{stats['total_shots']} shots contain lyrics ({stats['shots_with_lyrics_pct']}%)")
     print(f"  total lyric segments: {stats['total_lyric_segments']} "
           f"({stats['total_lyric_chars']} chars)")

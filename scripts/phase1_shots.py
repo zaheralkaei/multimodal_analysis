@@ -153,8 +153,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--threshold", type=float, default=35.0,
                        help="ContentDetector threshold (default 35.0, lower = more sensitive)")
-    parser.add_argument("--min-scene-len", type=int, default=30,
-                       help="Minimum shot length in frames (default 30 ≈ 1.25s at 24fps)")
+    parser.add_argument("--min-scene-len", type=int, default=15,
+                       help="Minimum shot length in frames (default 15 ≈ 0.6s at 24fps; "
+                            "round 8: was 30 ≈ 1.25s, which merged the sub-second cuts "
+                            "common in music videos)")
     parser.add_argument("--video", default=str(RAW / "video.mp4"),
                        help="Path to source video (default: data/raw/video.mp4)")
     args = parser.parse_args()
@@ -192,14 +194,13 @@ def main() -> int:
     with pred_path.open("w", encoding="utf-8", newline="") as f:
         w = csv.writer(f)
         w.writerow(["frame", "time_sec", "is_boundary", "shot_idx"])
+        import bisect
+        starts = [s["start_sec"] for s in shots]
         for frame_idx in range(total_frames):
             t = frame_idx / fps
             is_boundary = 1 if frame_idx in boundary_frames else 0
-            shot_idx = -1
-            for s in shots:
-                if s["start_sec"] <= t < s["end_sec"]:
-                    shot_idx = s["shot_idx"]
-                    break
+            j = bisect.bisect_right(starts, t) - 1    # O(log n), was O(n) per frame
+            shot_idx = shots[j]["shot_idx"] if j >= 0 and t < shots[j]["end_sec"] else -1
             w.writerow([frame_idx, round(t, 3), is_boundary, shot_idx])
     print(f"[ok] wrote {disp(pred_path)} ({total_frames} rows)")
 
