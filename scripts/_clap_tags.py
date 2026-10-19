@@ -51,13 +51,29 @@ TAG_GROUPS = {"mood": MOOD_TAGS, "section": SECTION_TAGS, "instrument": INSTRUME
               "audio_type": AUDIO_TYPE_TAGS}
 
 
+# Silence is decided by LOUDNESS, not by CLAP: on the round-10 calibration
+# video CLAP called a near-silent window "speech" (p=0.88).
+SILENCE_DBFS = -45.0
+
+
+def rms_dbfs(chunk) -> float:
+    import numpy as np
+    rms = float(np.sqrt(np.mean(np.square(np.asarray(chunk, dtype=np.float64))))) if len(chunk) else 0.0
+    return 20.0 * np.log10(max(rms, 1e-10))
+
+
 def window_audio_type(row: dict) -> str | None:
     """'music' | 'speech' | 'silence' for one CLAP row, or None if the row
-    predates the audio_type group."""
+    predates the audio_type group. A window quieter than SILENCE_DBFS is
+    silence; otherwise the louder of CLAP's music/speech scores decides."""
     try:
+        if row.get("rms_dbfs") not in (None, "") and float(row["rms_dbfs"]) < SILENCE_DBFS:
+            return "silence"
         scores = {t: float(row[t]) for t in AUDIO_TYPE_TAGS}
     except (KeyError, TypeError, ValueError):
         return None
+    if row.get("rms_dbfs") not in (None, ""):
+        scores.pop("silence", None)           # loud enough: not silence
     return max(scores, key=scores.get)
 
 

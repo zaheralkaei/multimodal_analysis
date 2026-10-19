@@ -152,9 +152,10 @@ class TestResume:
         shots = self._shots(tmp_path / "data" / "vid")
         out_csv = tmp_path / "shot_vision.csv"
         cur = shots[0]["mid_frame_path"]
+        sha = p2._image_sha(tmp_path / cur)   # round 10: reuse requires the same image
         out_csv.write_text(
-            "shot_idx,start_sec,end_sec,duration_sec,mid_frame,caption\n"
-            f"0,0.0,2.0,2.0,{cur},keep me\n",
+            "shot_idx,start_sec,end_sec,duration_sec,mid_frame,caption,mid_frame_sha\n"
+            f"0,0.0,2.0,2.0,{cur},keep me,{sha}\n",
             encoding="utf-8")
         monkeypatch.setattr(p2, "call_llm",
                             lambda *a, **k: ('{"caption": "fresh"}', 0.01))
@@ -175,3 +176,18 @@ class TestResume:
         # CSV stays in sync with shots.json (no phantom rows)
         content = (tmp_path / "shot_vision.csv").read_text(encoding="utf-8")
         assert len(content.strip().splitlines()) == 1  # header only
+    def test_row_reanalyzed_when_image_changes_under_same_name(self, p2, tmp_path, monkeypatch):
+        """Round 10: re-extracted frames keep their file names; a row may only
+        be reused when the image itself is unchanged."""
+        monkeypatch.setattr(p2, "REPO_ROOT", tmp_path)
+        shots = self._shots(tmp_path / "data" / "vid")
+        out_csv = tmp_path / "shot_vision.csv"
+        cur = shots[0]["mid_frame_path"]
+        out_csv.write_text(
+            "shot_idx,start_sec,end_sec,duration_sec,mid_frame,caption,mid_frame_sha\n"
+            f"0,0.0,2.0,2.0,{cur},old picture,0000000000000000\n",
+            encoding="utf-8")
+        monkeypatch.setattr(p2, "call_llm", lambda *a, **k: ('{"caption": "fresh"}', 0.01))
+        rows, stats = p2.analyze_shots("ollama", "m", shots,
+                                       tmp_path / "data" / "vid" / "frames", out_csv)
+        assert rows[0]["caption"] == "fresh"

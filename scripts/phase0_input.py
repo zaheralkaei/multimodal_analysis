@@ -216,9 +216,14 @@ def extract_frames(video: Path, out_dir: Path, fps: int = 1, timeout: int = 300)
         for f in stale:
             f.unlink()
         print(f"[info] cleared {len(stale)} stale frames from {disp(out_dir)}/")
+    # round=up: frame N shows the first source frame at or after (N-1)/fps.
+    # ffmpeg's default (round=near) keeps the LAST frame of each 1/fps slot,
+    # so frame N showed t = (N-1)/fps + 0.21 s at 2 fps / 24 fps source —
+    # measured on the round-10 calibration video. Every consumer assumes
+    # t = (N-1)/fps.
     cmd = [
         ffmpeg_exe() or "ffmpeg", "-y", "-i", str(video),
-        "-vf", f"fps={fps}",
+        "-vf", f"fps={fps}:round=up",
         "-q:v", "2",  # high quality JPEG
         "-loglevel", "error",
         str(out_dir / "frame_%05d.jpg")
@@ -264,6 +269,8 @@ def main() -> int:
     n_frames = extract_frames(video, FRAMES_DIR, args.fps, timeout=tmo)
     meta["frames_extracted"] = n_frames
     meta["frame_fps"] = args.fps
+    meta["frame_extraction"] = ("ffmpeg fps=N:round=up — frame N shows the first source "
+                                "frame at or after (N-1)/fps")
     meta["audio_path"] = disp(audio_wav)
     meta["audio_music_path"] = disp(music_wav)
     meta["frames_dir"] = disp(FRAMES_DIR) + "/"
@@ -271,6 +278,9 @@ def main() -> int:
     meta_path = PROCESSED / "metadata.json"
     meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     print(f"[ok] wrote {disp(meta_path)}")
+    from _lineage import record
+    record(PROCESSED, "phase0", [video], [meta_path, audio_wav, music_wav],
+           {"fps": args.fps, "audio_rates": [AUDIO_SPEECH[1], AUDIO_MUSIC[1]]}, __file__)
 
     print("\n[next] Phase 1: python scripts/phase1_shots.py")
     return 0

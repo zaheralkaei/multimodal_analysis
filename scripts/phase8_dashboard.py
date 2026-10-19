@@ -267,10 +267,18 @@ def main() -> int:
     beats = music_summary.get("beat_times", [])
 
     # Content profile (UI audit round 6): type drives emphasis + caveats
+    route = None
+    route_path = PROCESSED / "content_route.json"
+    if route_path.exists():
+        route = json.loads(route_path.read_text(encoding="utf-8"))
     profile = detect_content_type(
         shots=shots, music_summary=music_summary, transcript=transcript,
         video_duration=float(metadata.get("duration_sec", 0) or 0), clap_rows=clap,
-        override=args.content_type)
+        override=args.content_type, route=route)
+    qa = {}
+    qa_path = PROCESSED / "qa_report.json"
+    if qa_path.exists():
+        qa = json.loads(qa_path.read_text(encoding="utf-8"))
     content_type = profile["type"]
 
     starts = [float(s["start_sec"]) for s in shots]
@@ -621,7 +629,13 @@ def main() -> int:
         findings.append(f"<li>Shot duration: avg <b>{shot_stats.get('avg_shot_duration_sec', '?'):.1f}s</b>, "
                        f"min <b>{shot_stats.get('min_shot_duration_sec', '?'):.1f}s</b>, "
                        f"max <b>{shot_stats.get('max_shot_duration_sec', '?'):.1f}s</b>.</li>")
-    has_music_sig = bool(music_summary.get("tempo_bpm")) and bool(music_summary.get("n_beats"))
+    music_valid = (music_summary.get("beats_valid", True) is not False
+                   and stats.get("music_present") is not False)
+    has_music_sig = (bool(music_summary.get("tempo_bpm")) and bool(music_summary.get("n_beats"))
+                     and music_valid)
+    if not music_valid:
+        findings.append("<li><b>No music detected</b> (CLAP music/speech check before the "
+                        "analysis): tempo, beats, key and cut-on-beat are not reported.</li>")
     if stats.get("cuts_on_beat") is not None and n_shots > 0 and has_music_sig:
         al = stats.get("cut_beat_alignment") or {}
         n_cuts = stats.get("total_cuts", stats.get("total_shots"))
@@ -650,16 +664,23 @@ def main() -> int:
     if stats.get("shots_with_lyrics"):
         findings.append(f"<li><b>{stats['shots_with_lyrics']}/{stats['total_shots']} shots</b> contain spoken/sung lyrics "
                        f"({stats['shots_with_lyrics_pct']}%).</li>")
-    if music_summary.get("tempo_bpm"):
+    if music_summary.get("tempo_bpm") and music_valid:
         findings.append(f"<li>Music: <b>{music_summary['tempo_bpm']} BPM</b>, key <b>{music_summary.get('key', '?')}</b> "
                        f"({music_summary.get('n_beats', '?')} beats across {music_summary.get('duration_sec', '?')}s).</li>")
-    if clap_tags_present:
+    if clap_tags_present and music_valid:
         top_mood = max(clap_tags_present, key=lambda t: sum(float(r[t]) for r in clap) / len(clap))
         findings.append(f"<li>Dominant audio mood (CLAP): <b>{top_mood}</b></li>")
-    if emotion_counts:
-        top_emotion = emotion_counts.most_common(1)[0]
-        findings.append(f"<li>Most common visual emotion: <b>{html_lib.escape(str(top_emotion[0]))}</b> ({top_emotion[1]} shots, "
-                        f"{top_emotion[1]/max(1, n_shots)*100:.0f}%) — vision model: {safe_model} "
+    # Only valid vision answers count; "no people"/"other" are not emotions
+    def _valid(row, key):
+        return str(row.get(key, "")).lower() == "true" if key in row else True
+    valid_emotions = Counter(s.get("vision_emotion", "") for s in shots
+                             if _valid(s, "valid_vision")
+                             and s.get("vision_emotion", "") not in ("", "no people", "other"))
+    n_valid_vision = sum(1 for s in shots if _valid(s, "valid_vision"))
+    if valid_emotions:
+        top_emotion = valid_emotions.most_common(1)[0]
+        findings.append(f"<li>Most common visual emotion: <b>{html_lib.escape(str(top_emotion[0]))}</b> ({top_emotion[1]} of "
+                        f"{n_valid_vision} shots with a valid vision answer) — vision model: {safe_model} "
                         f"(<a href='#shots-table'>see per-shot table</a> — filter by emotion or search text).</li>")
     if source_url:
         findings.append(f"<li>Source: <a href='{html_lib.escape(source_url)}' target='_blank' rel='noopener'>{html_lib.escape(source_url)}</a> "
@@ -688,6 +709,70 @@ def main() -> int:
     for label, status in dq_items:
         dq_html += f"<tr><td style='padding:6px 12px;font-weight:bold;'>{label}</td><td style='padding:6px 12px;'>{status}</td></tr>"
     dq_html += "</table>"
+
+    # Coverage (round 10): how many shots each variable is VALID for
+    cov = stats.get("coverage") or {}
+    cov_labels = {
+        "vision": "Vision answer usable",
+        "camera": "Camera motion classified",
+        "camera_high_confidence": "Camera label high-confidence",
+        "audio_mood": "Audio mood valid (music under the shot)",
+        "transcript_segments_usable": "Transcript segments not flagged",
+        "shots_shorter_than_audio_window": "Shots shorter than the 5 s audio window",
+    }
+    if cov:
+        dq_html += ("<h3 style='margin-top:16px;'>Coverage — values used in statistics</h3>"
+                    "<table border='1' style='border-collapse:collapse;font-family:monospace;'>"
+                    "<tr><th style='padding:6px 12px;background:#eee;'>Variable</th>"
+                    "<th style='padding:6px 12px;background:#eee;'>Valid</th>"
+                    "<th style='padding:6px 12px;background:#eee;'>%</th></tr>")
+        for key, label in cov_labels.items():
+            c = cov.get(key)
+            if not c:
+                continue
+            pct = "—" if c.get("pct") is None else f"{c['pct']}%"
+            dq_html += (f"<tr><td style='padding:6px 12px;'>{label}</td>"
+                        f"<td style='padding:6px 12px;'>{c['valid']}/{c['total']}</td>"
+                        f"<td style='padding:6px 12px;'>{pct}</td></tr>")
+        dq_html += "</table>"
+
+    # QA report (round 10): cross-module consistency checks
+    sev_color = {"critical": "#c62828", "warning": "#ef6c00", "info": "#1565c0"}
+    qa_html = "<p><i>No QA report (re-run phase 7).</i></p>"
+    if qa:
+        sm = qa.get("summary", {})
+        qa_html = (f"<p><b style='color:{sev_color['critical']}'>{sm.get('critical', 0)} critical</b> · "
+                   f"<b style='color:{sev_color['warning']}'>{sm.get('warning', 0)} warnings</b> · "
+                   f"<b style='color:{sev_color['info']}'>{sm.get('info', 0)} info</b> — "
+                   "critical: do not use the affected numbers; warning: check before relying on it; "
+                   "info: context. Frame-similarity checks are heuristics that point you to shots, "
+                   "they do not decide.</p>")
+        items = qa.get("issues", [])
+        if items:
+            qa_html += ("<table border='1' style='border-collapse:collapse;font-size:12px;'>"
+                        "<tr><th style='padding:4px 8px;background:#eee;'>Severity</th>"
+                        "<th style='padding:4px 8px;background:#eee;'>Check</th>"
+                        "<th style='padding:4px 8px;background:#eee;'>Where</th>"
+                        "<th style='padding:4px 8px;background:#eee;'>Message</th></tr>")
+            for it in items[:40]:
+                where = ""
+                if it.get("shot_idx") is not None:
+                    where += f"shot {it['shot_idx']} "
+                if it.get("time_sec") is not None:
+                    where += f"{it['time_sec']}s {yt_link(float(it['time_sec']))}"
+                qa_html += (f"<tr><td style='padding:4px 8px;color:{sev_color.get(it['severity'], '#333')};"
+                            f"font-weight:bold;'>{it['severity']}</td>"
+                            f"<td style='padding:4px 8px;'>{html_lib.escape(it['check'])}</td>"
+                            f"<td style='padding:4px 8px;white-space:nowrap;'>{where}</td>"
+                            f"<td style='padding:4px 8px;'>{html_lib.escape(it['message'])}</td></tr>")
+            qa_html += "</table>"
+            if len(items) > 40:
+                qa_html += f"<p style='font-size:12px;'>… {len(items) - 40} more in <code>qa_report.json</code>.</p>"
+        review = qa.get("review_first", [])
+        if review:
+            qa_html += ("<p style='margin-top:10px;'><b>Review these shots first:</b> "
+                        + ", ".join(f"shot {r['shot_idx']} ({', '.join(sorted(set(r['checks'])))})"
+                                    for r in review[:12]) + "</p>")
 
     # ===== Methodology caveat =====
     # Caveats follow the content profile (UI audit round 6): music-specific
@@ -757,19 +842,23 @@ def main() -> int:
   {f'<a href="{html_lib.escape(source_url)}" target="_blank" rel="noopener">&#9654; open source video</a>' if source_url else ''}
   &middot; duration ~{total_sec:.0f}s &middot; {n_shots} shots &middot; generated {generated_at}
   <br><b>Content type:</b> {content_type}
-  ({'you set --content-type' if profile.get('confidence') is None else 'auto-detected from tempo / talk coverage / shot grammar'})
+  ({'you set --content-type' if profile.get('confidence') is None else 'auto-detected from audio type / talk coverage / shot grammar'})
   <br><b>Frame extraction:</b> {n_frames_extracted} frames at <b>{extracted_fps} fps</b>
   (video native: {round(float(video_fps), 1) if video_fps != '?' else '?'} fps).
-  Camera motion classification depends on this rate — at 2 fps we get 0.5s
-  time resolution. See README.md "Sampling-rate decision" for the trade-off
-  table and <a href="https://github.com/zaheralkaei/multimodal_analysis/blob/main/docs/COMPARISON_1FPS_VS_2FPS.md">
-  docs/COMPARISON_1FPS_VS_2FPS.md</a> for what changes between 1 fps and 2 fps.
+  These frames feed the vision model and the QA checks; camera motion is
+  measured separately at 8 fps straight from the video.
 </p>
 <p>Single video analyzed across 7 streams. All numbers auto-computed from CSV/JSON files in <code>data/&lt;video_id&gt;/</code>. Generated by <code>scripts/phase8_dashboard.py</code>.</p>
 
 <div class="findings">
   <h2>Honest findings (computed dynamically)</h2>
   {findings_html}
+</div>
+
+<div class="quality">
+  <h2>Quality checks across modules</h2>
+  <p class="section-subtitle"><b>Method:</b> <code>scripts/_qa.py</code> cross-checks the streams against each other (stale inputs via <code>lineage.json</code>, music presence vs. beat analysis, lyrics transcribed over silence, near-identical neighbouring shots, abrupt changes inside a shot, mock data). Written to <code>qa_report.json</code>.</p>
+  {qa_html}
 </div>
 
 <div class="quality">
@@ -783,7 +872,7 @@ def main() -> int:
 {timeline_html}
 
 <h2>2. Per-modality breakdowns</h2>
-<p class="section-subtitle"><b>Method:</b> Aggregations across all {n_shots} shots. <b>Emotion</b> = {safe_model} caption emotion word, color-coded by sentiment family. <b>Camera motion</b> = OpenCV optical flow classification (pan/tilt/zoom/static), see Phase 3 docstring for the per-class decision boundaries. <b>Audio mood</b> = mean CLAP probability for each of 12 mood tags across all 5s windows.</p>
+<p class="section-subtitle"><b>Method:</b> Aggregations across all {n_shots} shots. <b>Emotion</b> = {safe_model} caption emotion word, color-coded by sentiment family. <b>Camera motion</b> = feature tracking + RANSAC global-motion estimate (pan/tilt/zoom/static/handheld/unknown), see the Phase 3 docstring for thresholds. <b>Audio mood</b> = mean CLAP probability for each of 12 mood tags across all 5s windows.</p>
 <div class="grid">
   <div class="panel">{emotion_dist_html}</div>
   <div class="panel">{cam_dist_html}</div>

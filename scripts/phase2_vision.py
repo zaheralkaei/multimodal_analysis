@@ -304,11 +304,15 @@ def parse_json_response(raw: str) -> dict:
     return cleaned
 
 
-def _reusable(row: dict, mid_rel: str, model: str) -> bool:
+def _reusable(row: dict, mid_rel: str, model: str, mid_sha: str | None = None) -> bool:
     """Keep a previously analyzed row only if it is still valid: same
     mid-frame, same model (rows from before the model column are accepted),
     and not an error/parse-error/budget/mock row."""
     if row.get("mid_frame") != mid_rel:
+        return False
+    # same file name is not enough: frames are re-extracted when phase 0
+    # re-runs (round 10). Reuse only a row whose image hash still matches.
+    if row.get("mid_frame_sha") != mid_sha:
         return False
     if row.get("model") and row.get("model") != model:
         return False
@@ -349,6 +353,14 @@ def fetch_openrouter_pricing(model: str, timeout: int = 20) -> dict | None:
     return {}
 
 
+def _image_sha(path: Path) -> str | None:
+    import hashlib
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:16]
+    except OSError:
+        return None
+
+
 def _count_pending(shots: list[dict], out_csv: Path, model: str) -> int:
     existing: dict[int, dict] = {}
     if out_csv.exists():
@@ -358,8 +370,12 @@ def _count_pending(shots: list[dict], out_csv: Path, model: str) -> int:
                     existing[int(r["shot_idx"])] = r
                 except (ValueError, KeyError):
                     pass
+    def sha(s):
+        rel = s.get("mid_frame_path", "")
+        return _image_sha(REPO_ROOT / rel) if rel else None
     return sum(1 for i, s in enumerate(shots)
-               if not (i in existing and _reusable(existing[i], s.get("mid_frame_path", ""), model)))
+               if not (i in existing and _reusable(existing[i], s.get("mid_frame_path", ""),
+                                                   model, sha(s))))
 
 
 def analyze_shots(provider: str, model: str, shots: list[dict], frames_dir: Path,
@@ -383,15 +399,16 @@ def analyze_shots(provider: str, model: str, shots: list[dict], frames_dir: Path
             print(f"[info] resuming from existing CSV: {len(existing)} shots already done")
 
     cols = (["shot_idx", "start_sec", "end_sec", "duration_sec", "mid_frame"]
-            + [q[0] for q in QUESTIONS] + ["emotion_raw", "status", "model"])
+            + [q[0] for q in QUESTIONS] + ["emotion_raw", "status", "model", "mid_frame_sha"])
 
     with out_csv.open("w", encoding="utf-8", newline="") as f_out:
         writer = csv.DictWriter(f_out, fieldnames=cols)
         writer.writeheader()
         for i, shot in enumerate(shots):
             mid_rel = shot.get("mid_frame_path", "")
+            mid_sha = _image_sha(REPO_ROOT / mid_rel) if mid_rel else None
             stale_row = existing.get(i)
-            if stale_row is not None and _reusable(stale_row, mid_rel, model):
+            if stale_row is not None and _reusable(stale_row, mid_rel, model, mid_sha):
                 stale_row = {k: v for k, v in stale_row.items() if k in cols}
                 rows.append(stale_row)
                 writer.writerow(stale_row)
@@ -409,6 +426,7 @@ def analyze_shots(provider: str, model: str, shots: list[dict], frames_dir: Path
                 "duration_sec": shot["duration_sec"],
                 "mid_frame": mid_rel,
                 "model": model,
+                "mid_frame_sha": mid_sha,
             }
             if max_usd is not None and USAGE["cost_usd"] >= max_usd:
                 row["caption"] = f"[error: budget {max_usd:.2f} USD reached]"
@@ -557,6 +575,11 @@ def main() -> int:
     })
     stats_path = PROCESSED / "shot_vision_stats.json"
     stats_path.write_text(json.dumps(stats, indent=2) + "\n", encoding="utf-8")
+    import hashlib
+    from _lineage import record
+    record(PROCESSED, "phase2", [shots_path, PROCESSED / "metadata.json"], [out_csv, stats_path],
+           {"provider": provider, "model": args.model, "temperature": 0, "seed": 42,
+            "prompt_sha": hashlib.sha256(COMBINED_PROMPT.encode()).hexdigest()}, __file__)
 
     print(f"\n[ok] wrote {disp(out_csv)} ({len(rows)} rows, "
           f"{stats['calls']} successful calls, {stats['parse_errors']} parse errors, "

@@ -24,7 +24,8 @@ Round 8 fixes (methodology review R2/R3):
     kept for continuity but should not be reported as song structure.
 """
 from __future__ import annotations
-from _clap_tags import ALL_TAGS, MOOD_TAGS, SECTION_TAGS, INSTRUMENT_TAGS, TAG_GROUPS, music_share
+from _clap_tags import (ALL_TAGS, MOOD_TAGS, SECTION_TAGS, INSTRUMENT_TAGS, TAG_GROUPS,
+                        music_share, rms_dbfs)
 
 import argparse, json, os, sys, time
 from pathlib import Path
@@ -89,10 +90,10 @@ def slice_audio(audio_path: Path, window_sec: float = 5.0):
         yield round(i / sr, 3), round((i + len(chunk)) / sr, 3), chunk, sr
 
 
-def compute_batch_logits(model, processor, chunks: list, sr: int):
+def compute_batch_logits(model, processor, chunks: list, sr: int, tags: list | None = None):
     """(n_chunks, n_tags) CLAP logits (= cosine * logit_scale) and the scale."""
     import torch
-    inputs = processor(audio=chunks, sampling_rate=sr, text=ALL_TAGS,
+    inputs = processor(audio=chunks, sampling_rate=sr, text=tags or ALL_TAGS,
                        return_tensors="pt", padding=True)
     # Audit R9 (reproducibility): for the fused CLAP model, transformers'
     # feature extractor marks ONE RANDOM clip per batch as "longer" when none
@@ -152,12 +153,13 @@ def main() -> int:
     rows, cos_rows = [], []
     for (start, end, _c, _sr), pr, cs in zip(windows, probs, cosine):
         rows.append({"start_sec": start, "end_sec": end,
-                     **{t: round(float(v), 5) for t, v in zip(ALL_TAGS, pr)}})
+                     **{t: round(float(v), 5) for t, v in zip(ALL_TAGS, pr)},
+                     "rms_dbfs": round(rms_dbfs(_c), 2)})
         cos_rows.append({"start_sec": start, "end_sec": end,
                          **{t: round(float(v), 5) for t, v in zip(ALL_TAGS, cs)}})
     elapsed = time.time() - t0
 
-    cols = ["start_sec", "end_sec"] + ALL_TAGS
+    cols = ["start_sec", "end_sec"] + ALL_TAGS + ["rms_dbfs"]
     with out_csv.open("w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()
@@ -168,7 +170,7 @@ def main() -> int:
 
     out_json.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
     with (PROCESSED / "audio_clap_cosine.csv").open("w", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=cols)
+        w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore", restval="")
         w.writeheader()
         w.writerows(cos_rows)
     (PROCESSED / "audio_clap_stats.json").write_text(json.dumps({
@@ -182,6 +184,11 @@ def main() -> int:
         "n_windows": len(rows),
         "music_window_share": music_share(rows),
     }, indent=2) + "\n", encoding="utf-8")
+    from _lineage import record
+    record(PROCESSED, "phase5", [audio_path],
+           [out_csv, PROCESSED / "audio_clap_cosine.csv", PROCESSED / "audio_clap_stats.json"],
+           {"window_sec": args.window, "model": "laion/clap-htsat-fused",
+            "tags": ALL_TAGS}, __file__)
 
     # Quick sanity check
     if rows:

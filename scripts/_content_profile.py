@@ -35,7 +35,7 @@ def _f(x, default=0.0) -> float:
 def detect_content_type(shots: list, music_summary: dict, transcript: list,
                         video_duration: float = 0.0,
                         clap_rows: list = None,
-                        override: str = "auto") -> dict:
+                        override: str = "auto", route: dict | None = None) -> dict:
     """Ordered, explainable rules; first match wins."""
     if override and override != "auto":
         return {"type": override, "confidence": None,
@@ -70,13 +70,17 @@ def detect_content_type(shots: list, music_summary: dict, transcript: list,
     # 112 BPM), so tempo alone made every speech a "song". Music presence now
     # comes from CLAP's music/speech/silence split when phase 5 ran.
     m_share = music_share(clap_rows)
+    if m_share is None and route and route.get("audio_shares"):
+        m_share = route["audio_shares"].get("music")   # early route (round 10)
     if m_share is not None:
         has_music = beat_track_ok and m_share >= MUSIC_SHARE_MIN
     else:
         has_music = beat_track_ok
 
     # Camera staticness (vlog single-camera vs film's edit-heavy grammar)
-    motions = [s.get("camera_motion", "") for s in shots]
+    # only shots with a camera label count (round 10: "unknown" is not motion)
+    motions = [s.get("camera_motion", "") for s in shots
+               if s.get("camera_motion", "") not in ("", "unknown")]
     static_frac = (motions.count("static") / len(motions)) if motions else 0.0
 
     reasons: list[str] = []

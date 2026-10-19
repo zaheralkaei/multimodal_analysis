@@ -138,6 +138,10 @@ def main() -> int:
                   "audio_file": disp(audio_path)})
     (PROCESSED / "transcript_stats.json").write_text(json.dumps(stats, indent=2) + "\n",
                                                      encoding="utf-8")
+    from _lineage import record
+    record(PROCESSED, "phase4", [audio_path],
+           [out_csv, out_json, PROCESSED / "transcript_stats.json"],
+           {"model": args.model, "language": args.language}, __file__)
     if n_suspect:
         print(f"[warn] {n_suspect}/{len(segments)} segments flagged suspect "
               f"(likely hallucination; excluded from lyric stats in phase 7)")

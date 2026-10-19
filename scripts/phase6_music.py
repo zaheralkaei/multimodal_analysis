@@ -141,6 +141,23 @@ def main() -> int:
     summary["librosa_version"] = __import__("librosa").__version__
     summary["beat_tracker"] = "librosa.beat.beat_track (no downbeats)"
 
+    # Round 10: the early route (route_content.py) says whether there is music.
+    # librosa returns a "tempo" for speech too, so without music the beats,
+    # tempo and key are kept for transparency but marked invalid.
+    sys.path.insert(0, str(Path(__file__).parent))
+    from route_content import load_route
+    route = load_route(PROCESSED)
+    if route is None:
+        summary["music_present"] = None
+        summary["beats_valid"] = True
+        summary["music_presence_basis"] = "no route (run route_content.py)"
+    else:
+        summary["music_present"] = bool(route.get("has_music"))
+        summary["beats_valid"] = bool(route.get("has_music"))
+        summary["music_presence_basis"] = route.get("has_music_basis")
+    if summary["beats_valid"] is False:
+        print("[info] route says no music: tempo/beats/key written but marked invalid")
+
     # Write per-second CSV
     import csv
     out_csv = PROCESSED / "music_features.csv"
@@ -157,6 +174,10 @@ def main() -> int:
     out_json = PROCESSED / "music_summary.json"
     out_json.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     print(f"[ok] wrote {disp(out_json)}")
+    from _lineage import record
+    inputs = [audio_path] + ([PROCESSED / "content_route.json"]
+                             if (PROCESSED / "content_route.json").exists() else [])
+    record(PROCESSED, "phase6", inputs, [out_csv, out_json], {"sr": 22050}, __file__)
 
     print(f"\n[stats] tempo: {summary['tempo_bpm']} BPM, key: {summary['key']}, "
           f"{summary['n_beats']} beats across {summary['duration_sec']:.0f}s")

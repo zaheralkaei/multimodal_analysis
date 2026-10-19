@@ -164,6 +164,11 @@ def main() -> int:
     # quoting and run arbitrary commands (reachable from the web UI).
     phases = [
         (0, ["phase0_input.py", video_arg, "--id", video_id, "--fps", str(args.fps)]),
+        # Round 10: decide early whether there is music (CLAP music/speech/
+        # silence on sampled windows) so later phases know what is valid
+        (0.5, ["route_content.py"]
+              + ([] if args.content_type == "auto" else ["--content-type", args.content_type])
+              + (["--no-clap"] if args.skip_phase5 else [])),
         (1, ["phase1_shots.py", "--threshold", str(args.shot_threshold),
              "--min-scene-len", str(args.min_scene_len)]),
         (2, ["phase2_vision.py", "--model", args.model]
@@ -186,7 +191,8 @@ def main() -> int:
 
     py = sys.executable
     for n, cmd in phases:
-        if n < args.start_from:
+        route_missing = n == 0.5 and not (out_dir / "content_route.json").exists()
+        if n < args.start_from and not route_missing:
             print(f"[skip] phase {n} (start_from={args.start_from})")
             continue
         if n == 2 and args.skip_phase2:
@@ -195,7 +201,10 @@ def main() -> int:
         if n == 5 and args.skip_phase5:
             print(f"[skip] phase 5 (--skip-phase5)")
             continue
-        print(f"\n========== phase {n} ==========")
+        if n == 0.5:
+            print("\n---------- route: what kind of audio is this? ----------")
+        else:
+            print(f"\n========== phase {n} ==========")
         argv = [py, str(SCRIPTS / cmd[0]), *cmd[1:]]
         # Phase 1 needs the video path — read it from the metadata that
         # phase 0 just wrote (round-4 audit fix F3: was a guess of
@@ -218,7 +227,7 @@ def main() -> int:
             _finish(run, out_dir, video_id)
             # 10 + phase: never 0 — `return n` made a phase-0 failure look
             # like success (exit 0) to callers such as the web UI
-            return 10 + n
+            return 10 + int(n)
 
     manifest = _finish(run, out_dir, video_id)
     dashboard = reports_dir / "dashboard.html"

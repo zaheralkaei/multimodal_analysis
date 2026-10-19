@@ -231,6 +231,10 @@ def main() -> int:
     stats_path = PROCESSED / "shot_detection_stats.json"
     stats_path.write_text(json.dumps(stats, indent=2) + "\n", encoding="utf-8")
     print(f"[ok] wrote {disp(stats_path)}")
+    from _lineage import record
+    record(PROCESSED, "phase1", [video_path, PROCESSED / "metadata.json"],
+           [out_path, stats_path],
+           {"threshold": args.threshold, "min_scene_len": args.min_scene_len}, __file__)
 
     if shots:
         print(f"\n[stats] {len(shots)} shots, "

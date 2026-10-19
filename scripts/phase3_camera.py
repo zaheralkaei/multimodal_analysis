@@ -367,6 +367,10 @@ def main() -> int:
     }
     (PROCESSED / "shot_camera_stats.json").write_text(json.dumps(stats, indent=2) + "\n",
                                                       encoding="utf-8")
+    from _lineage import record
+    record(PROCESSED, "phase3", [shots_path, video],
+           [out_csv, PROCESSED / "shot_camera_stats.json"],
+           {"flow_fps": args.flow_fps, "thresholds": stats["thresholds"]}, __file__)
 
     from collections import Counter
     counts = Counter(r["camera_motion"] for r in rows)
