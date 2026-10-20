@@ -6,6 +6,9 @@ Unit tests check modules one by one; this checks them together. It builds a
 pipeline on it, and scores the outputs against the ground truth.
 
     python scripts/calibration.py run          # make + run pipeline (offline) + score
+    python scripts/calibration.py run --cloud  # same, but the audio stack uses the hosted
+                                               # services (needs FAL_KEY, GROQ_API_KEY,
+                                               # REPLICATE_API_TOKEN; ~$0.15)
     python scripts/calibration.py make         # only build data/raw/calib_v1.mp4 + truth
     python scripts/calibration.py score        # only score data/calib_v1/
 
@@ -25,6 +28,12 @@ Checks (all must pass; speech checks are skipped without a TTS engine):
   shots      cut precision/recall within 2 frames
   camera     designed motion recovered (pan/tilt/zoom direction, static)
   tempo      120 BPM within 3 %          beats   F-measure within 70 ms
+  downbeats  bar starts (every 2 s) F-measure within 70 ms
+  cut_downbeat  cut-on-downbeat test significant (7 of 10 cuts on bar starts)
+  sections   a section boundary within 1 s of 10.0 s (music changes there)
+  separation stem aligned with the mix and used for transcription;
+             --cloud: the stem is >= 15 dB quieter than the mix in the
+             instrumental part (vocals really isolated)
   cut_beat   cut-on-beat test significant (8 of 10 testable cuts on beats)
   audio_type CLAP music/speech/silence per window matches the timeline
   route      early route says music present
@@ -41,11 +50,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 from _paths import disp
 from _tools import ffmpeg_exe
 
-CALIB_ID = "calib_v2"
+CALIB_ID = "calib_v3"
 W, H, FPS, SR = 640, 360, 24, 48000
 DURATION = 36.0
 BPM = 120.0
 MUSIC_END, SPEECH_START, SPEECH_END = 20.0, 20.25, 30.0
+SECTION_B_START = 10.0          # music changes section here (new chords, lead, busier drums)
+BEATS_PER_BAR = 4
 SPEECH_TEXT = ("Welcome to the calibration test. The quick brown fox jumps over the lazy dog. "
                "Every number in this report must be checked.")
 
@@ -75,6 +86,7 @@ RATE = 0.12   # pan/tilt: frame sizes per second; zoom: log-scale per second
 
 def ground_truth(speech: bool) -> dict:
     beats = [round(k * 60.0 / BPM, 3) for k in range(int(MUSIC_END * BPM / 60.0))]
+    downbeats = beats[::BEATS_PER_BAR]
     cuts = [s for s, *_ in SHOTS[1:]]
     period = 60.0 / BPM
     on_beat = [c for c in cuts if c < MUSIC_END and abs((c / period) - round(c / period)) < 1e-6]
@@ -85,7 +97,10 @@ def ground_truth(speech: bool) -> dict:
     segs.append({"start": SPEECH_END, "end": DURATION, "type": "silence"})
     return {
         "version": CALIB_ID, "duration": DURATION, "fps": FPS, "size": [W, H],
-        "tempo_bpm": BPM, "beats": beats, "cuts": cuts,
+        "tempo_bpm": BPM, "beats": beats, "downbeats": downbeats, "cuts": cuts,
+        "cuts_on_downbeat": [c for c in on_beat if any(abs(c - d) < 1e-6 for d in downbeats)],
+        "sections": [{"start": 0.0, "end": SECTION_B_START, "label": "A"},
+                     {"start": SECTION_B_START, "end": MUSIC_END, "label": "B"}],
         "cuts_on_beat": on_beat, "cuts_off_beat": off_beat,
         "shots": [{"start": s, "end": e, "motion": m, "expected": sorted(x)}
                   for s, e, m, x in SHOTS],
@@ -207,33 +222,41 @@ def make_audio(path_wav: Path, tmp: Path) -> bool:
         j = min(n, i + len(sig))
         y[i:j] += sig[: j - i]
 
-    chords = [[220.0, 261.63, 329.63], [174.61, 220.0, 261.63],
-              [261.63, 329.63, 392.0], [196.0, 246.94, 293.66]]   # Am F C G
+    chords_a = [[220.0, 261.63, 329.63], [174.61, 220.0, 261.63],
+                [261.63, 329.63, 392.0], [196.0, 246.94, 293.66]]   # Am F C G
+    chords_b = [[293.66, 349.23, 440.0], [233.08, 293.66, 349.23],
+                [349.23, 440.0, 523.25], [261.63, 329.63, 392.0]]   # Dm Bb F C
     n_beats = int(MUSIC_END / period)
     for k in range(n_beats):
         tb = k * period
+        in_b = tb >= SECTION_B_START - 1e-9
         tt = np.arange(int(0.25 * SR)) / SR
         kick = np.sin(2 * np.pi * (50 + 70 * np.exp(-tt * 30)) * tt) * np.exp(-tt * 18)
-        add(tb, 0.9 * kick)
-        if k % 2 == 1:
+        add(tb, (1.0 if k % BEATS_PER_BAR == 0 else 0.75) * kick)   # accented downbeat
+        if k % 2 == 1 or in_b:
             sn = rng.standard_normal(int(0.12 * SR)) * np.exp(-np.arange(int(0.12 * SR)) / SR * 30)
-            add(tb, 0.35 * sn)
-        hat = rng.standard_normal(int(0.03 * SR)) * np.exp(-np.arange(int(0.03 * SR)) / SR * 120)
-        add(tb + period / 2, 0.12 * np.diff(hat, prepend=0))
-        chord = chords[(k // 4) % 4]
+            add(tb, (0.45 if in_b else 0.35) * sn)
+        for h in ([0.5] if not in_b else [0.25, 0.5, 0.75]):           # B: 16th hi-hats
+            hat = rng.standard_normal(int(0.03 * SR)) * np.exp(-np.arange(int(0.03 * SR)) / SR * 120)
+            add(tb + period * h, 0.12 * np.diff(hat, prepend=0))
+        chord = (chords_b if in_b else chords_a)[(k // BEATS_PER_BAR) % 4]
         tt = np.arange(int(period * SR)) / SR
         bass = np.sin(2 * np.pi * chord[0] / 2 * tt) * np.exp(-tt * 3)
         add(tb, 0.35 * bass)
-        for q in range(2):                                    # 8th-note arpeggio
-            f0 = chord[(k * 2 + q) % 3] * 2
-            ta = np.arange(int(period / 2 * SR)) / SR
-            note = (np.sin(2 * np.pi * f0 * ta) + 0.3 * np.sin(4 * np.pi * f0 * ta)) * np.exp(-ta * 6)
-            add(tb + q * period / 2, 0.12 * note)
+        steps = 4 if in_b else 2                                       # B: 16th-note lead
+        for q in range(steps):
+            f0 = chord[(k * steps + q) % 3] * 2
+            ta = np.arange(int(period / steps * SR)) / SR
+            harm = range(1, 7) if in_b else range(1, 3)                # B: brighter timbre
+            note = sum(np.sin(2 * np.pi * f0 * h * ta) / h for h in harm) * np.exp(-ta * 6)
+            add(tb + q * period / steps, (0.10 if in_b else 0.12) * note)
     music_mask = t_all < MUSIC_END
-    for c_i in range(int(MUSIC_END / (4 * period))):         # sustained chord pad
-        a, b = c_i * 4 * period, (c_i + 1) * 4 * period
+    bar = BEATS_PER_BAR * period
+    for c_i in range(int(MUSIC_END / bar)):                            # sustained chord pad
+        a, b = c_i * bar, (c_i + 1) * bar
         sl = (t_all >= a) & (t_all < b)
-        for f0 in chords[c_i % 4]:
+        pad = (chords_b if a >= SECTION_B_START - 1e-9 else chords_a)[c_i % 4]
+        for f0 in pad:
             y[sl] += 0.05 * np.sin(2 * np.pi * f0 * t_all[sl])
     y[~music_mask] = 0.0
 
@@ -297,6 +320,21 @@ def match_events(pred: list, truth: list, tol: float) -> dict:
     f1 = 2 * prec * rec / (prec + rec) if prec + rec else 0.0
     return {"tp": tp, "n_pred": len(pred), "n_truth": len(truth),
             "precision": round(prec, 3), "recall": round(rec, 3), "f1": round(f1, 3)}
+
+
+def isolation_db(processed: Path) -> dict:
+    """Loudness of the vocal stem vs the mix in the purely instrumental part
+    (0-20 s: no voice in the calibration music) and in the speech part."""
+    import numpy as np
+    import soundfile as sf
+    from _clap_tags import rms_dbfs
+    mix, sr = sf.read(str(processed / "audio.wav"), dtype="float32")
+    voc, sr2 = sf.read(str(processed / "vocals.wav"), dtype="float32")
+    seg = lambda y, r, a, b: y[int(a * r):int(b * r)]
+    inst = rms_dbfs(seg(mix, sr, 0.5, MUSIC_END - 0.5)) - rms_dbfs(seg(voc, sr2, 0.5, MUSIC_END - 0.5))
+    sp = rms_dbfs(seg(mix, sr, SPEECH_START + 0.5, SPEECH_END - 0.5)) - \
+        rms_dbfs(seg(voc, sr2, SPEECH_START + 0.5, SPEECH_END - 0.5))
+    return {"instrumental_drop_db": round(float(inst), 1), "speech_drop_db": round(float(sp), 1)}
 
 
 def frame_timing_errors(processed: Path, gt: dict) -> list:
@@ -369,18 +407,54 @@ def score(processed: Path, gt: dict) -> dict:
     add("camera", acc >= 0.85, {"correct": ok, "total": tot, "wrong": wrong}, "accuracy >= 0.85")
 
     ms = json.loads((processed / "music_summary.json").read_text(encoding="utf-8"))
-    tempo = float(ms.get("tempo_bpm") or 0)
+    struct_path = processed / "music_structure.json"
+    struct = json.loads(struct_path.read_text(encoding="utf-8")) if struct_path.exists() else {}
+    tempo = float(struct.get("bpm") or ms.get("tempo_bpm") or 0)
     add("tempo", abs(tempo - gt["tempo_bpm"]) / gt["tempo_bpm"] <= 0.03, round(tempo, 1),
         f"{gt['tempo_bpm']} BPM +- 3%")
-    pred_beats = [b for b in ms.get("beat_times", []) if b < MUSIC_END]
+    pred_beats = [b for b in (struct.get("beats") or ms.get("beat_times", [])) if b < MUSIC_END]
     mb = match_events(pred_beats, gt["beats"], tol=0.07)
     add("beats", mb["f1"] >= 0.8, mb, "F-measure >= 0.8 (+-70 ms)")
+    if gt.get("downbeats"):
+        md = match_events(struct.get("downbeats") or [], gt["downbeats"], tol=0.07)
+        add("downbeats", md["f1"] >= 0.8, md, "F-measure >= 0.8 (+-70 ms)")
+        inner = [float(x["start"]) for x in (struct.get("segments") or [])[1:]]
+        target = gt["sections"][1]["start"]
+        near = [b for b in inner if abs(b - target) <= 1.0]
+        add("sections", bool(near) and len(inner) - len(near) <= 1,
+            {"inner_boundaries": inner, "source": struct.get("sections_source")},
+            f"boundary within 1 s of {target} s, at most 1 extra")
 
     st = json.loads((processed / "sync_stats.json").read_text(encoding="utf-8"))
     al = st.get("cut_beat_alignment") or {}
     add("cut_beat", bool(al.get("significant")),
         {k: al.get(k) for k in ("observed_rate", "chance_rate", "p_value")},
         "cut-on-beat significant (8/10 cuts designed on the beat)")
+    if gt.get("downbeats"):
+        ad = st.get("cut_downbeat_alignment") or {}
+        add("cut_downbeat", bool(ad.get("significant")),
+            {k: ad.get(k) for k in ("observed_rate", "chance_rate", "p_value")},
+            "cut-on-downbeat significant (7/10 cuts designed on bar starts)")
+
+    sep_path = processed / "separation_stats.json"
+    sep = json.loads(sep_path.read_text(encoding="utf-8")) if sep_path.exists() else {}
+    tst_path = processed / "transcript_stats.json"
+    tst = json.loads(tst_path.read_text(encoding="utf-8")) if tst_path.exists() else {}
+    if sep and sep.get("provider") != "off":
+        import soundfile as sf
+        v = sf.info(str(processed / "vocals.wav"))
+        m = sf.info(str(processed / "audio.wav"))
+        diff = abs(v.frames / v.samplerate - m.frames / m.samplerate)
+        add("separation_wiring", diff <= 0.05 and tst.get("input") == "vocal stem",
+            {"provider": sep.get("provider"), "length_diff_sec": round(diff, 3),
+             "transcribed": tst.get("input")}, "stem aligned (+-50 ms) and used for transcription")
+        if not sep.get("is_passthrough"):
+            iso = isolation_db(processed)
+            add("separation_isolation", iso["instrumental_drop_db"] >= 15, iso,
+                "stem >= 15 dB below the mix in the instrumental part")
+    else:
+        add("separation_wiring", None, sep.get("provider"), "stem used for transcription",
+            "separation off")
 
     from _clap_tags import window_audio_type
     clap = _load_csv(processed / "audio_clap.csv")
@@ -469,6 +543,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("action", choices=["make", "score", "run"])
     ap.add_argument("--id", default=CALIB_ID)
+    ap.add_argument("--cloud", action="store_true",
+                    help="use the hosted audio services (needs keys; ~$0.15)")
     args = ap.parse_args()
     video = REPO_ROOT / "data" / "raw" / f"{args.id}.mp4"
     truth = video.with_suffix(".truth.json")
@@ -479,6 +555,11 @@ def main() -> int:
     if args.action == "run":
         cmd = [sys.executable, str(Path(__file__).parent / "run_pipeline.py"), str(video),
                "--id", args.id, "--provider", "mock"]
+        if args.cloud:
+            cmd += ["--separation", "fal", "--asr-backend", "groq", "--sections", "replicate"]
+        else:
+            # offline: exercise every step's wiring without any paid service
+            cmd += ["--separation", "passthrough", "--asr-backend", "local", "--sections", "local"]
         print("[run] " + " ".join(cmd[1:]))
         rc = subprocess.run(cmd, cwd=str(REPO_ROOT)).returncode
         if rc != 0:

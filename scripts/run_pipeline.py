@@ -130,10 +130,33 @@ def main() -> int:
                         help="Phase 2: estimate cost / check model slug only, no paid calls")
     parser.add_argument("--max-usd", type=float, default=None,
                         help="Phase 2 budget cap in USD (default: $VISION_MAX_USD or 1.0)")
+    # Round 11: audio stack (heavy parts on hosted services, light parts local)
+    parser.add_argument("--separation", default="auto",
+                        choices=["auto", "fal", "local", "passthrough", "off"],
+                        help="vocal separation before transcription (auto = fal if FAL_KEY "
+                             "and music; passthrough = offline wiring test)")
+    parser.add_argument("--asr-backend", default="auto", choices=["auto", "local", "groq"],
+                        help="transcription backend (auto = groq if GROQ_API_KEY, else local)")
+    parser.add_argument("--beats", default="auto", choices=["auto", "beat_this", "replicate", "librosa"],
+                        help="beats/downbeats (auto = Beat This! locally if installed)")
+    parser.add_argument("--sections", default="auto", choices=["auto", "replicate", "local", "none"],
+                        help="song sections (auto = Replicate All-In-One if REPLICATE_API_TOKEN, else local)")
+    parser.add_argument("--offline", action="store_true",
+                        help="no paid audio services: separation off, local transcription, "
+                             "local sections (vision is controlled by --provider)")
     parser.add_argument("--start-from", type=int, default=0,
                        help="Skip phases before this number (0-8). Useful to resume.")
     args = parser.parse_args()
 
+    if args.offline:
+        if args.separation == "auto":
+            args.separation = "off"
+        if args.asr_backend == "auto":
+            args.asr_backend = "local"
+        if args.sections == "auto":
+            args.sections = "local"
+        if args.beats == "replicate":
+            args.beats = "auto"
     video_id = derive_video_id(args.source, args.id)
     out_dir = REPO_ROOT / "data" / video_id
     reports_dir = REPO_ROOT / "reports" / video_id
@@ -176,10 +199,12 @@ def main() -> int:
             + (["--dry-run"] if args.vision_dry_run else [])
             + (["--max-usd", str(args.max_usd)] if args.max_usd is not None else [])),
         (3, ["phase3_camera.py", "--flow-fps", str(args.flow_fps)]),
-        (4, ["phase4_transcribe.py", "--model", args.whisper_model]
+        (3.5, ["separate_vocals.py", "--provider", args.separation]),
+        (4, ["phase4_transcribe.py", "--model", args.whisper_model, "--backend", args.asr_backend]
             + (["--language", args.whisper_language] if args.whisper_language else [])),
         (5, ["phase5_audio.py"]),
         (6, ["phase6_music.py"]),
+        (6.5, ["music_structure.py", "--beats", args.beats, "--sections", args.sections]),
         (7, ["phase7_sync.py"]),
         (8, ["phase8_dashboard.py"]
             + ([] if args.content_type == "auto" else ["--content-type", args.content_type])),
@@ -203,6 +228,10 @@ def main() -> int:
             continue
         if n == 0.5:
             print("\n---------- route: what kind of audio is this? ----------")
+        elif n == 3.5:
+            print("\n---------- separate: isolate the vocals ----------")
+        elif n == 6.5:
+            print("\n---------- structure: beats, downbeats, sections ----------")
         else:
             print(f"\n========== phase {n} ==========")
         argv = [py, str(SCRIPTS / cmd[0]), *cmd[1:]]

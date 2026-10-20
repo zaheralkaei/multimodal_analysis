@@ -167,13 +167,15 @@ dashboard says music presence is unverified.
 |---|---|---|---|
 | 0 | Input prep | Download video, extract frames + audio | `frames/`, `audio.wav`, `metadata.json` |
 | route | Early routing | CLAP music / speech / silence on sampled windows (silence by loudness) → which music analyses are valid | `content_route.json` |
+| separate | Vocal separation | fal.ai Demucs (hosted) / local demucs / off — the vocal stem feeds transcription | `vocals.wav`, `vocal_activity.csv` |
 | 1 | Shot detection | PySceneDetect ContentDetector | `shots.json`, `shot_predictions.csv` |
 | 2 | Vision | google/gemma-4-31b-it via OpenRouter (JSON-mode prompt) | `shot_vision.csv`, `shot_vision_stats.json` |
 | 3 | Camera motion | KLT feature tracks + RANSAC similarity (OpenCV), 8 fps inside each shot | `shot_camera.csv`, `shot_camera_stats.json` |
 | 4 | Transcription | faster-whisper (multilingual), hallucination flags | `transcript.json`, `transcript.csv`, `transcript_stats.json` |
 | 5 | Audio tagging | CLAP (laion/clap-htsat-fused), per-group softmax on 48 kHz audio | `audio_clap.csv`, `audio_clap_cosine.csv` |
 | 6 | Music structure | librosa tempo + key detection (48 kHz audio) | `music_features.csv`, `music_summary.json` |
-| 7 | Sync | Join everything per shot + chance-corrected cut-on-beat test | `sync_per_shot.csv`, `sync_stats.json` |
+| structure | Beats, downbeats, sections | Beat This! (local) + Replicate All-In-One sections (hosted) or local novelty sections | `music_structure.json` |
+| 7 | Sync | Join everything per shot + chance-corrected beat / downbeat / section-boundary tests + section table | `sync_per_shot.csv`, `sync_stats.json`, `sections.csv` |
 | 8 | Dashboard | Plotly HTML incl. QA checks + coverage | `reports/<video_id>/dashboard.html` |
 
 ### Web UI (local Flask app)
@@ -200,7 +202,7 @@ makes API calls (using your `.env` OpenRouter key); everything else runs locally
 ### Testing without spending money
 
 ```bash
-python -m pytest -q                         # 215 unit/integration tests, all offline
+python -m pytest -q                         # 237 unit/integration tests, all offline
 python scripts/preflight.py --online --id <video_id>   # environment + model + price
 python scripts/run_pipeline.py URL --id test_run --provider mock   # full offline rehearsal
 python scripts/run_pipeline.py URL --vision-dry-run                # real model check, no calls
@@ -217,6 +219,21 @@ git commit (+ dirty flag), Python/platform, package versions, the exact
 command of every phase with exit code and time, and the SHA-256 of the input
 video. Model names, prompts, temperature/seed, thresholds and tag
 vocabularies are in each phase's `*_stats.json`, listed in the manifest.
+
+### Audio stack: heavy parts hosted, light parts local (round 11)
+
+| Task | Hosted (needs key in `.env`) | Free fallback |
+|---|---|---|
+| Vocal separation | fal.ai Demucs — `FAL_KEY` (~$0.15 per song) | off (transcribe the mix) or `--separation local` |
+| Transcription | Groq whisper-large-v3-turbo — `GROQ_API_KEY` (< $0.01) | local faster-whisper |
+| Song sections | Replicate All-In-One — `REPLICATE_API_TOKEN` (~$0.11) | local unlabelled sections |
+| Beats + downbeats | — | Beat This! on CPU (default) |
+
+Each hosted call is cached by audio content, logged with its estimated
+price in `data/<id>/cloud_usage.json`, and capped by `AUDIO_MAX_USD`
+(default $1). `--offline` uses only the free path. Details and what is not
+yet verified against the live services:
+[docs/ROUND11_AUDIO.md](docs/ROUND11_AUDIO.md).
 
 ### Does the assembled pipeline work? (round 10)
 
@@ -240,7 +257,8 @@ answer (120 BPM music, cuts on and off the beat, designed pans/tilts/zooms,
 synthetic speech, silence). The whole pipeline must recover it:
 
 ```bash
-python scripts/calibration.py run      # ~4 min, offline; exits 1 on any failed check
+python scripts/calibration.py run          # ~5 min, offline; exits 1 on any failed check
+python scripts/calibration.py run --cloud  # same through fal/Groq/Replicate (~$0.15)
 ```
 
 It found three real bugs on its first runs (frame timing off by 0.21 s,
@@ -457,6 +475,7 @@ optical flow (already done in phase 3) for camera motion — see
 - [docs/PLAN_ROUND_8.md](docs/PLAN_ROUND_8.md) — round-8 validity fixes + model roadmap
 - [docs/AUDIT_R9.md](docs/AUDIT_R9.md) — round-9 general audit (security, reproducibility)
 - [docs/ROUND10_INTEGRATION.md](docs/ROUND10_INTEGRATION.md) — round-10 lineage, routing, coverage, QA, calibration video
+- [docs/ROUND11_AUDIO.md](docs/ROUND11_AUDIO.md) — round-11 cloud audio stack (separation, Groq, beats/downbeats/sections)
 
 - [docs/METHODOLOGY_REVIEW.md](docs/METHODOLOGY_REVIEW.md) — alternatives
   to current shot detection, camera motion, transcription (free + paid)

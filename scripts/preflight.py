@@ -106,6 +106,31 @@ def check_env(r: Report) -> str:
     return model
 
 
+def check_audio_stack(r: Report):
+    """Round 11: hosted audio services (keys only - never printed) + local models."""
+    keys = {"FAL_KEY": "vocal separation (fal.ai Demucs, ~$0.0007/s)",
+            "GROQ_API_KEY": "transcription (Groq whisper-large-v3-turbo, ~$0.04/h)",
+            "REPLICATE_API_TOKEN": "labelled song sections (Replicate All-In-One, ~$0.11/run)"}
+    for k, what in keys.items():
+        v = os.environ.get(k, "")
+        r.add(OK if v and v != "your-key-here" else WARN, f"{k}",
+              f"set - {what}" if v and v != "your-key-here"
+              else f"not set - {what} falls back to a local/free option")
+    try:
+        import beat_this  # noqa: F401
+        r.add(OK, "beat-this installed", "local beats + downbeats")
+    except ImportError:
+        r.add(WARN, "beat-this not installed", "downbeats unavailable (pip install beat-this)")
+    r.add(OK, f"audio budget AUDIO_MAX_USD = {os.environ.get('AUDIO_MAX_USD', '1.0')}")
+
+
+def estimate_audio_cost(minutes: float) -> dict:
+    sec = minutes * 60
+    return {"separation_fal": round(sec * 0.0007, 3),
+            "transcription_groq": round(max(10, sec) / 3600 * 0.04, 4),
+            "sections_replicate": 0.11}
+
+
 def check_online(r: Report, model: str, n_shots: int | None, max_usd: float):
     import urllib.request
     base = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
@@ -160,6 +185,8 @@ def main() -> int:
     print("== models ==")
     check_model_caches(r, args.whisper_model)
     model = check_env(r)
+    print("== audio stack ==")
+    check_audio_stack(r)
     if args.model:
         model = args.model
     n_shots = args.shots
@@ -170,6 +197,13 @@ def main() -> int:
             r.add(OK, f"{disp(sp)}: {n_shots} shots")
         else:
             r.add(WARN, f"{disp(sp)} not found", "run phases 0-1 first for a shot count")
+    if args.id:
+        meta_p = REPO_ROOT / "data" / args.id / "metadata.json"
+        if meta_p.exists():
+            mins = json.loads(meta_p.read_text(encoding="utf-8")).get("duration_sec", 0) / 60
+            est = estimate_audio_cost(mins)
+            r.add(OK, f"audio stack estimate for {mins:.1f} min: ${sum(est.values()):.3f}",
+                  ", ".join(f"{k} ${v}" for k, v in est.items()))
     if args.online:
         print("== OpenRouter (public, no charge) ==")
         check_online(r, model, n_shots, args.max_usd)

@@ -239,6 +239,49 @@ def check_people_vs_motion(rows: list) -> list:
     return out
 
 
+def check_tempo_agreement(music_summary: dict | None, structure: dict | None) -> list:
+    """Two independent beat trackers (librosa in phase 6, Beat This!/All-In-One
+    in the structure step) should agree up to a factor of 2 (half/double
+    tempo is the usual, mostly harmless ambiguity). Any other ratio means at
+    least one tracker is wrong, so every beat-based statistic is in doubt."""
+    a = float((music_summary or {}).get("tempo_bpm") or 0)
+    b = float((structure or {}).get("bpm") or 0)
+    if not a or not b or (music_summary or {}).get("beats_valid") is False:
+        return []
+    ratio = max(a, b) / min(a, b)
+    if min(abs(ratio - r) / r for r in (1.0, 2.0)) <= 0.04:
+        return []
+    return [_issue("warning", "tempo_disagreement",
+                   f"Beat trackers disagree: {b:.1f} BPM ({(structure or {}).get('beats_source')}) vs "
+                   f"{a:.1f} BPM (librosa), ratio {ratio:.2f} — beat/downbeat statistics depend on "
+                   f"which is right; check by ear before using them")]
+
+
+def check_audio_stack(audio_stack: dict | None, structure: dict | None, route: dict | None) -> list:
+    out = []
+    a = audio_stack or {}
+    if a.get("separation_passthrough"):
+        out.append(_issue("warning", "separation_passthrough",
+                          "Vocal 'stem' is the unchanged mix (offline wiring test) — lyrics were "
+                          "transcribed from the full mix"))
+    elif a.get("separation") in (None, "off") and route and route.get("has_music"):
+        out.append(_issue("info", "separation_off",
+                          "No vocal separation: lyrics were transcribed from the full mix "
+                          "(set FAL_KEY or --separation local for better lyrics)"))
+    st = structure or {}
+    if st and not st.get("skipped"):
+        if not st.get("downbeats"):
+            out.append(_issue("info", "downbeats", "No downbeats (beat tracker without bar "
+                              "positions) — cut-on-downbeat not tested"))
+        if st.get("segments") and not st.get("sections_labelled"):
+            out.append(_issue("info", "sections", "Song sections are unlabelled (local novelty "
+                              "boundaries, letters A/B/C) — not verse/chorus"))
+        if st.get("n_beats_masked"):
+            out.append(_issue("info", "beats_masked", f"{st['n_beats_masked']} beats outside music "
+                              f"regions removed (beat trackers 'find' beats in speech)"))
+    return out
+
+
 def check_resolution(coverage: dict) -> list:
     c = coverage.get("shots_shorter_than_audio_window")
     if c and c["total"] and c["valid"] / c["total"] > 0.5:
@@ -252,13 +295,19 @@ def check_resolution(coverage: dict) -> list:
 # ------------------------------------------------------------------ report
 
 def build_report(*, rows, coverage, route, lineage, music_summary, transcript, clap,
-                 transcript_stats, vision_stats, repo_root, frames_dir, frame_fps) -> dict:
+                 transcript_stats, vision_stats, repo_root, frames_dir, frame_fps,
+                 audio_stack=None, structure=None) -> dict:
     issues = []
     issues += check_lineage(lineage)
     issues += check_vision(rows, vision_stats)
     issues += check_coverage(coverage)
     issues += check_route(route)
-    issues += check_music(music_summary, route)
+    ms = dict(music_summary or {})
+    if structure and structure.get("bpm"):
+        ms["tempo_bpm"] = structure["bpm"]          # structure beats supersede librosa's tempo
+    issues += check_music(ms, route)
+    issues += check_tempo_agreement(music_summary, structure)
+    issues += check_audio_stack(audio_stack, structure, route)
     issues += check_transcript(transcript, clap, transcript_stats)
     issues += check_frames(rows, Path(repo_root), Path(frames_dir), frame_fps)
     issues += check_people_vs_motion(rows)

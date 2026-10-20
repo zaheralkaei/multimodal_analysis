@@ -133,3 +133,42 @@ def beat_alignment(events: list[float], beats: list[float], duration: float,
             "n_permutations": n_perm,
         }
     return res
+
+
+def boundary_alignment(boundaries: list[float], cuts: list[float], duration: float,
+                       tol: float = 0.25) -> dict:
+    """Do section boundaries coincide with cuts more than chance?
+
+    A boundary "hits" if a cut lies within +-tol. Under H0 boundary positions
+    are independent of the edit, so each hits with probability p = share of
+    the timeline within tol of some cut (union of [c-tol, c+tol]). Exact
+    binomial tail via poisson_binomial_sf.
+    """
+    res = {"n_boundaries": len(boundaries), "tolerance_sec": tol,
+           "null_model": "boundary position independent of cuts (coverage of cut windows)"}
+    if len(boundaries) < 2 or not cuts or duration <= 0:
+        res.update({"observed_rate": None, "chance_rate": None, "p_value": None,
+                    "significant": False, "note": "too few section boundaries or cuts"})
+        return res
+    spans = sorted((max(0.0, c - tol), min(duration, c + tol)) for c in cuts)
+    covered, cur_s, cur_e = 0.0, None, None
+    for s, e in spans:
+        if cur_e is None or s > cur_e:
+            if cur_e is not None:
+                covered += cur_e - cur_s
+            cur_s, cur_e = s, e
+        else:
+            cur_e = max(cur_e, e)
+    covered += cur_e - cur_s
+    p = min(1.0, covered / duration)
+    cs = sorted(cuts)
+    hits = 0
+    for b in boundaries:
+        j = bisect.bisect_left(cs, b)
+        near = min((abs(b - cs[k]) for k in (j - 1, j) if 0 <= k < len(cs)), default=math.inf)
+        hits += near <= tol
+    n = len(boundaries)
+    pv = poisson_binomial_sf([p] * n, hits)
+    res.update({"observed_rate": round(hits / n, 4), "chance_rate": round(p, 4),
+                "p_value": round(pv, 6), "significant": bool(pv < 0.05), "hits": hits})
+    return res

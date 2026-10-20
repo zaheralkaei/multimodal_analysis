@@ -37,6 +37,16 @@ Round 10 (does the assembled pipeline hold together?):
     valid_audio_mood, audio_window_shared) and a coverage table: statistics
     and the dashboard use only valid values and say how many there were.
   - qa_report.json: cross-module checks (scripts/_qa.py).
+
+Round 11 (audio stack):
+  - Beats come from music_structure.json (Beat This! / All-In-One, beats
+    outside music removed) when present, else from phase 6 (librosa).
+  - Cut-on-DOWNBEAT test (chance = 2*tol / bar length) and section-boundary
+    vs cut test (scripts/_stats.boundary_alignment).
+  - sections.csv: one row per song section (cut rate, shot length, energy,
+    camera, vocals, emotion) — the unit of analysis for music questions,
+    since most shots are shorter than the audio windows.
+  - Per-shot `section`, `cut_on_downbeat`, `vocals_active_share`.
 """
 from __future__ import annotations
 import argparse, csv, json, os, sys
@@ -55,7 +65,8 @@ BAD_VISION_STATUS = {"error", "parse_error", "budget", "mock"}
 
 # lineage step -> stream it produced
 STEP_STREAM = {"phase2": "vision", "phase3": "camera", "phase4": "transcript",
-               "phase5": "clap", "phase6": "music", "phase1": "shots"}
+               "phase5": "clap", "phase6": "music", "phase1": "shots",
+               "structure": "structure", "separate": "separation"}
 
 
 def load_csv(path: Path) -> list[dict]:
@@ -120,7 +131,9 @@ def join_data(shots: list[dict], vision: list[dict], camera: list[dict],
               transcript: list[dict], clap: list[dict],
               music: list[dict], beats: list[float],
               mood_tags: list[str], music_present: bool | None = None,
-              clap_window_sec: float = 5.0) -> tuple[list[dict], dict]:
+              clap_window_sec: float = 5.0, downbeats: list | None = None,
+              segments: list | None = None, vocal_activity: list | None = None
+              ) -> tuple[list[dict], dict]:
     """Join all streams by time. Returns (per_shot_rows, stats_dict).
 
     music_present: False = route found no music (no beat test, no audio mood);
@@ -189,6 +202,14 @@ def join_data(shots: list[dict], vision: list[dict], camera: list[dict],
                 cut_on_beat_count += 1
 
         camera_label = c.get("camera_motion", "")
+        section = next((sg.get("label", "") for sg in (segments or [])
+                        if float(sg["start"]) <= s < float(sg["end"])), "")
+        on_downbeat = ("" if (i == 0 or not test_beats or not downbeats) else
+                       any(within_tolerance(s, d, BEAT_TOLERANCE_SEC) for d in downbeats))
+        va = [(overlap(s, e, float(r["start_sec"]), float(r["end_sec"])), str(r["active"]).lower() == "true")
+              for r in (vocal_activity or [])]
+        va = [(w, a) for w, a in va if w > 0]
+        vocals_share = round(sum(w for w, a in va if a) / sum(w for w, _ in va), 3) if va else ""
         rows.append({
             "shot_idx": i,
             "start_sec": s,
@@ -226,6 +247,9 @@ def join_data(shots: list[dict], vision: list[dict], camera: list[dict],
             "music_n_beats": beats_in_shot if music_ok else "",
             # Cross-modal
             "cut_on_beat": is_cut_on_beat,
+            "cut_on_downbeat": on_downbeat,
+            "section": section,
+            "vocals_active_share": vocals_share,
             "n_lyric_segments": len(lyrics_in_shot),
             "lyric_text": lyric_text,
             # Validity (round 10): use a value only where its flag is True
@@ -246,6 +270,15 @@ def join_data(shots: list[dict], vision: list[dict], camera: list[dict],
                      "chance_rate": None, "p_value": None,
                      "note": ("no music detected — cut-on-beat is not meaningful"
                               if not music_ok else "no beats")}
+    if test_beats and downbeats:
+        downbeat_alignment = beat_alignment(cut_times, downbeats, duration, tol=BEAT_TOLERANCE_SEC)
+    else:
+        downbeat_alignment = {"skipped": True, "significant": False, "chance_rate": None,
+                              "p_value": None, "note": "no downbeats"}
+    from _stats import boundary_alignment
+    inner = [float(sg["start"]) for sg in (segments or [])[1:]]
+    section_alignment = (boundary_alignment(inner, cut_times, duration) if segments
+                         else {"skipped": True, "note": "no sections"})
     n = len(rows)
     coverage = {
         "vision": _pct(sum(r["valid_vision"] for r in rows), n),
@@ -261,6 +294,8 @@ def join_data(shots: list[dict], vision: list[dict], camera: list[dict],
         "cuts_on_beat": cut_on_beat_count,
         "cuts_on_beat_pct": round(cut_on_beat_count / max(1, total_cuts) * 100, 1),
         "cut_beat_alignment": alignment,
+        "cut_downbeat_alignment": downbeat_alignment,
+        "section_boundary_alignment": section_alignment,
         "music_present": music_present,
         "coverage": coverage,
         "misaligned_rows_dropped": misaligned,
@@ -274,6 +309,38 @@ def join_data(shots: list[dict], vision: list[dict], camera: list[dict],
         "clap_mood_tags": mood_tags,
     }
     return rows, stats
+
+
+def section_table(rows: list, segments: list, music: list) -> list:
+    """One row per section: the unit of analysis for music-related questions."""
+    from collections import Counter
+    out = []
+    for sg in segments or []:
+        a, b = float(sg["start"]), float(sg["end"])
+        dur = max(1e-6, b - a)
+        shots = [r for r in rows if a <= (float(r["start_sec"]) + float(r["end_sec"])) / 2 < b]
+        cuts = [r for r in rows if r["shot_idx"] != 0 and a <= float(r["start_sec"]) < b]
+        rms = [(overlap(a, b, float(m["start_sec"]), float(m["end_sec"])), float(m["rms_energy"]))
+               for m in music if m.get("rms_energy")]
+        rms = [(w, v) for w, v in rms if w > 0]
+        cams = [r["camera_motion"] for r in shots if r["valid_camera"]]
+        moving = [c for c in cams if c not in ("static", "handheld")]
+        emos = [r["vision_emotion"] for r in shots if r["valid_vision"]
+                and r["vision_emotion"] not in ("", "no people", "other")]
+        vocal = [float(r["vocals_active_share"]) for r in shots if r["vocals_active_share"] != ""]
+        out.append({
+            "label": sg.get("label", ""), "start_sec": round(a, 3), "end_sec": round(b, 3),
+            "duration_sec": round(dur, 3), "n_shots": len(shots),
+            "cuts_per_min": round(len(cuts) / dur * 60, 2),
+            "mean_shot_sec": round(sum(float(r["duration_sec"]) for r in shots) / len(shots), 3) if shots else "",
+            "mean_rms": round(sum(w * v for w, v in rms) / sum(w for w, _ in rms), 5) if rms else "",
+            "camera_moving_share": round(len(moving) / len(cams), 3) if cams else "",
+            "dominant_camera": Counter(cams).most_common(1)[0][0] if cams else "",
+            "vocals_active_share": round(sum(vocal) / len(vocal), 3) if vocal else "",
+            "dominant_emotion": Counter(emos).most_common(1)[0][0] if emos else "",
+            "n_valid_vision": sum(1 for r in shots if r["valid_vision"]),
+        })
+    return out
 
 
 def main() -> int:
@@ -308,7 +375,14 @@ def main() -> int:
     clap = stream("clap", lambda: load_csv(PROCESSED / "audio_clap.csv"))
     music = stream("music", lambda: load_csv(PROCESSED / "music_features.csv")) or []
     music_summary = stream("music", lambda: load_json(PROCESSED / "music_summary.json")) or {}
-    beats = music_summary.get("beat_times", [])
+    structure = stream("structure", lambda: load_json(PROCESSED / "music_structure.json")) or {}
+    if structure.get("beats"):
+        beats, beats_source = structure["beats"], structure.get("beats_source", "structure")
+    else:
+        beats, beats_source = music_summary.get("beat_times", []), "librosa (phase 6)"
+    downbeats = structure.get("downbeats") or []
+    segments = structure.get("segments") or []
+    vocal_activity = stream("separation", lambda: load_csv(PROCESSED / "vocal_activity.csv")) or []
 
     from route_content import load_route
     route = load_route(PROCESSED)
@@ -327,7 +401,19 @@ def main() -> int:
     clap_stats = load_json(PROCESSED / "audio_clap_stats.json")
     rows, stats = join_data(shots, vision, camera, transcript, clap, music, beats, MOOD_TAGS,
                             music_present=music_present,
-                            clap_window_sec=float(clap_stats.get("window_sec", 5.0)))
+                            clap_window_sec=float(clap_stats.get("window_sec", 5.0)),
+                            downbeats=downbeats, segments=segments, vocal_activity=vocal_activity)
+    stats["beats_source"] = beats_source
+    stats["n_downbeats"] = len(downbeats)
+    stats["sections"] = {"n": len(segments), "source": structure.get("sections_source"),
+                         "labelled": structure.get("sections_labelled")}
+    sep = load_json(PROCESSED / "separation_stats.json")
+    tstats = load_json(PROCESSED / "transcript_stats.json")
+    stats["audio_stack"] = {"separation": sep.get("provider"), "separation_passthrough": sep.get("is_passthrough"),
+                            "asr_backend": tstats.get("backend"), "asr_model": tstats.get("model"),
+                            "asr_input": tstats.get("input")}
+    from _cloud import spent
+    stats["cloud_audio_est_usd"] = spent(PROCESSED)
 
     vstats = load_json(PROCESSED / "shot_vision_stats.json") if "vision" not in dropped else {}
     if vstats:
@@ -348,6 +434,16 @@ def main() -> int:
         for r in rows:
             w.writerow(r)
     print(f"[ok] wrote {disp(out_csv)} ({len(rows)} rows)")
+    sec_rows = section_table(rows, segments, music)
+    out_sec = PROCESSED / "sections.csv"
+    if sec_rows:
+        with out_sec.open("w", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(sec_rows[0].keys()))
+            w.writeheader()
+            w.writerows(sec_rows)
+        print(f"[ok] wrote {disp(out_sec)} ({len(sec_rows)} sections)")
+    else:
+        out_sec.unlink(missing_ok=True)
 
     # QA report across modules
     from _qa import build_report
@@ -356,7 +452,8 @@ def main() -> int:
                       music_summary=music_summary, transcript=transcript, clap=clap,
                       transcript_stats=load_json(PROCESSED / "transcript_stats.json"),
                       vision_stats=vstats, repo_root=REPO_ROOT,
-                      frames_dir=PROCESSED / "frames", frame_fps=int(meta.get("frame_fps") or 0))
+                      frames_dir=PROCESSED / "frames", frame_fps=int(meta.get("frame_fps") or 0),
+                      audio_stack=stats.get("audio_stack"), structure=structure)
     stats["qa_summary"] = qa["summary"]
     out_qa = PROCESSED / "qa_report.json"
     out_qa.write_text(json.dumps(qa, indent=2) + "\n", encoding="utf-8")
@@ -367,7 +464,8 @@ def main() -> int:
 
     inputs = [shots_path] + [PROCESSED / f for f in (
         "shot_vision.csv", "shot_camera.csv", "transcript.csv", "audio_clap.csv",
-        "music_features.csv", "music_summary.json", "content_route.json")
+        "music_features.csv", "music_summary.json", "content_route.json",
+        "music_structure.json", "vocal_activity.csv")
         if (PROCESSED / f).exists()]
     record(PROCESSED, "phase7", inputs, [out_csv, out_json, out_qa],
            {"beat_tolerance_sec": BEAT_TOLERANCE_SEC,
@@ -383,6 +481,12 @@ def main() -> int:
               f"chance {al['chance_rate'] * 100:.1f}% ± {al['chance_sd'] * 100:.1f}, "
               f"p = {al['p_value']:.4g}"
               f"{'  (significant)' if al.get('significant') else '  (not distinguishable from chance)'}")
+    for key, label in (("cut_downbeat_alignment", "cut-on-downbeat"),
+                       ("section_boundary_alignment", "section boundaries on cuts")):
+        a = stats[key]
+        if a.get("chance_rate") is not None:
+            print(f"  {label}: {a['observed_rate'] * 100:.0f}% vs chance {a['chance_rate'] * 100:.0f}%, "
+                  f"p = {a['p_value']:.3g}{'  (significant)' if a.get('significant') else ''}")
     cov = stats["coverage"]
     print("  coverage: " + ", ".join(f"{k} {v['valid']}/{v['total']}" for k, v in cov.items()))
     if any(stats["misaligned_rows_dropped"].values()):

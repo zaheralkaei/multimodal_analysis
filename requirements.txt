@@ -21,6 +21,15 @@ faster-whisper>=1.0.0
 transformers>=4.40.0
 torch>=2.0.0
 
+# Hosted audio services (round 11) — HTTP client
+requests>=2.31.0
+
+# Beats + downbeats on CPU (Beat This!, ISMIR 2024, MIT; ~78 MB checkpoint on first use)
+beat-this>=1.0.0
+einops
+soxr
+rotary-embedding-torch
+
 # Audio analysis
 librosa>=0.10.0
 soundfile>=0.12.0

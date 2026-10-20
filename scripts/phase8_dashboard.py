@@ -275,6 +275,12 @@ def main() -> int:
         shots=shots, music_summary=music_summary, transcript=transcript,
         video_duration=float(metadata.get("duration_sec", 0) or 0), clap_rows=clap,
         override=args.content_type, route=route)
+    structure = {}
+    st_path = PROCESSED / "music_structure.json"
+    if st_path.exists():
+        structure = json.loads(st_path.read_text(encoding="utf-8"))
+    sections_rows = load_csv_rows(PROCESSED / "sections.csv", "sections.csv") \
+        if (PROCESSED / "sections.csv").exists() else []
     qa = {}
     qa_path = PROCESSED / "qa_report.json"
     if qa_path.exists():
@@ -334,6 +340,18 @@ def main() -> int:
                       "<extra></extra>",
         showlegend=False, name="Shots",
     ), row=1, col=1)
+
+    # Song sections as shaded bands behind the shot bars (round 11)
+    for k, sg in enumerate(structure.get("segments") or []):
+        fig.add_vrect(x0=float(sg["start"]), x1=float(sg["end"]), row=1, col=1,
+                      fillcolor=["#cfe8ff", "#ffe3c4", "#d8f5d0", "#f1d4f7"][k % 4],
+                      opacity=0.35, line_width=0, layer="below",
+                      annotation_text=str(sg.get("label", "")), annotation_position="top left")
+    if structure.get("downbeats"):
+        fig.add_trace(go.Scatter(
+            x=structure["downbeats"], y=[1.08] * len(structure["downbeats"]), mode="markers",
+            marker=dict(symbol="triangle-down", size=6, color="#555"), name="Downbeats",
+            hovertemplate="Downbeat %{x:.2f}s<extra></extra>", showlegend=True), row=1, col=1)
 
     # Emotion legend (dedup by color, label = first emotion with that color)
     seen_emotions: dict[str, str] = {}
@@ -664,6 +682,19 @@ def main() -> int:
     if stats.get("shots_with_lyrics"):
         findings.append(f"<li><b>{stats['shots_with_lyrics']}/{stats['total_shots']} shots</b> contain spoken/sung lyrics "
                        f"({stats['shots_with_lyrics_pct']}%).</li>")
+    for key, label, what in (("cut_downbeat_alignment", "on a downbeat", "bar starts"),
+                             ("section_boundary_alignment", "", "")):
+        a = stats.get(key) or {}
+        if a.get("chance_rate") is None or not music_valid:
+            continue
+        verdict = "<b>more than chance</b>" if a.get("significant") else "<b>not distinguishable from chance</b>"
+        if key == "cut_downbeat_alignment":
+            findings.append(f"<li>{a['observed_rate'] * 100:.0f}% of cuts land {label} (±100 ms) — chance "
+                            f"{a['chance_rate'] * 100:.0f}%, {verdict} (p = {a['p_value']:.3g}).</li>")
+        else:
+            findings.append(f"<li>{a.get('hits', 0)}/{a['n_boundaries']} song-section boundaries have a cut "
+                            f"within ±0.25 s — chance {a['chance_rate'] * 100:.0f}%, {verdict} "
+                            f"(p = {a['p_value']:.3g}).</li>")
     if music_summary.get("tempo_bpm") and music_valid:
         findings.append(f"<li>Music: <b>{music_summary['tempo_bpm']} BPM</b>, key <b>{music_summary.get('key', '?')}</b> "
                        f"({music_summary.get('n_beats', '?')} beats across {music_summary.get('duration_sec', '?')}s).</li>")
@@ -687,6 +718,25 @@ def main() -> int:
                         f"— every &#9654; glyph in the per-shot table deep-links to the shot's start time.</li>")
     findings_html = "<ul>" + "".join(findings) + "</ul>"
 
+    # Sections table (round 11): the unit of analysis for music questions
+    sections_html = ""
+    if sections_rows:
+        src = structure.get("sections_source", "?")
+        lab = "labelled" if structure.get("sections_labelled") else "unlabelled (A/B/C = similar-sounding parts)"
+        cols = [("label", "Section"), ("start_sec", "Start"), ("end_sec", "End"), ("n_shots", "Shots"),
+                ("cuts_per_min", "Cuts/min"), ("mean_shot_sec", "Mean shot s"), ("mean_rms", "Energy"),
+                ("camera_moving_share", "Camera moving"), ("dominant_camera", "Main camera"),
+                ("vocals_active_share", "Vocals"), ("dominant_emotion", "Main emotion")]
+        sections_html = (f"<p class='section-subtitle'><b>Method:</b> sections from <code>{html_lib.escape(str(src))}</code>, "
+                         f"{lab}; beats/downbeats from <code>{html_lib.escape(str(structure.get('beats_source')))}</code>. "
+                         "Shots are assigned by their midpoint; energy is overlap-weighted RMS; camera and emotion use "
+                         "only valid per-shot values.</p><table border='1' style='border-collapse:collapse;font-size:12px;'><tr>"
+                         + "".join(f"<th style='padding:4px 8px;background:#eee;'>{h}</th>" for _, h in cols) + "</tr>")
+        for r in sections_rows:
+            sections_html += "<tr>" + "".join(
+                f"<td style='padding:4px 8px;'>{html_lib.escape(str(r.get(k, '')))}</td>" for k, _ in cols) + "</tr>"
+        sections_html += "</table>"
+
     # ===== Data quality section =====
     dq_items = []
     dq_items.append(("Frame extraction", f"{n_frames_extracted} frames at {extracted_fps} fps (video native: {round(float(video_fps), 1) if video_fps != '?' else '?'} fps)"))
@@ -704,7 +754,16 @@ def main() -> int:
     dropped = stats.get("misaligned_rows_dropped") or {}
     if any(dropped.values()):
         dq_items.append(("Stale rows", f"⚠ dropped per-shot rows that no longer match shots.json: {dropped} — re-run those phases"))
-    dq_items.append(("Music structure", f"{'✓' if music_summary else '⚠'} {music_summary.get('n_beats', 0)} beats, {music_summary.get('tempo_bpm', '?')} BPM"))
+    dq_items.append(("Music structure", f"{'✓' if music_summary else '⚠'} {music_summary.get('n_beats', 0)} beats, {music_summary.get('tempo_bpm', '?')} BPM (librosa)"
+                      + (f"; structure: {len(structure.get('beats') or [])} beats / {len(structure.get('downbeats') or [])} downbeats "
+                         f"({structure.get('beats_source')}), {len(structure.get('segments') or [])} sections ({structure.get('sections_source')})"
+                         if structure and not structure.get('skipped') else "")))
+    aud = stats.get("audio_stack") or {}
+    if aud:
+        dq_items.append(("Audio stack", f"separation: {aud.get('separation') or 'off'}"
+                         + (" (PASSTHROUGH test)" if aud.get("separation_passthrough") else "")
+                         + f"; transcription: {aud.get('asr_backend')} {aud.get('asr_model') or ''} on the {aud.get('asr_input')}"
+                         + f"; cloud audio cost ≈ ${float(stats.get('cloud_audio_est_usd') or 0):.3f}"))
     dq_html = "<table border='1' style='border-collapse:collapse;font-family:monospace;'>"
     for label, status in dq_items:
         dq_html += f"<tr><td style='padding:6px 12px;font-weight:bold;'>{label}</td><td style='padding:6px 12px;'>{status}</td></tr>"
@@ -854,6 +913,8 @@ def main() -> int:
   <h2>Honest findings (computed dynamically)</h2>
   {findings_html}
 </div>
+
+{"<h2>Song sections</h2>" + sections_html if sections_html else ""}
 
 <div class="quality">
   <h2>Quality checks across modules</h2>
