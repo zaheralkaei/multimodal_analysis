@@ -62,7 +62,8 @@ def is_suspect(seg: dict) -> bool:
             and float(seg.get("avg_logprob", 0) or 0) < LOGPROB_MIN)
 
 
-GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+GROQ_URL = os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1").rstrip("/") \
+    + "/audio/transcriptions"
 GROQ_MODEL = "whisper-large-v3-turbo"
 CHUNK_SEC = 600.0
 OVERLAP_SEC = 5.0
@@ -129,17 +130,21 @@ def transcribe_groq(audio_path: Path, language: str | None, processed: Path,
     dur = len(y) / sr
     price = _cloud.PRICES["groq_whisper_turbo_per_hour" if "turbo" in model
                           else "groq_whisper_v3_per_hour"]
-    est_total = sum(max(10.0, c[1] - c[0]) for c in chunk_plan(dur)) / 3600 * price
-    ok, why = _cloud.budget_ok(processed, est_total)
-    if not ok:
-        raise _cloud.CloudError(why)
-    out, lang = [], None
+    # encode every chunk first so the budget check counts only what is NOT
+    # cached (a fully cached re-run must never be refused near the cap)
+    chunks = []
     for cut_s, cut_e, own_s, own_e in chunk_plan(dur):
         buf = io.BytesIO()
         sf.write(buf, y[int(cut_s * sr):int(cut_e * sr)], sr, format="FLAC")
         audio = buf.getvalue()
-        ck = _cloud.cache_key("groq", _cloud.sha_bytes(audio), model, language, "v1")
-        resp = _cloud.cache_get_json("groq", ck)
+        ck = _cloud.cache_key("groq", GROQ_URL, _cloud.sha_bytes(audio), model, language, "v1")
+        chunks.append((cut_s, cut_e, own_s, own_e, audio, ck, _cloud.cache_get_json("groq", ck)))
+    est_total = sum(max(10.0, c[1] - c[0]) for c in chunks if c[6] is None) / 3600 * price
+    ok, why = _cloud.budget_ok(processed, est_total)
+    if not ok:
+        raise _cloud.CloudError(why)
+    out, lang = [], None
+    for cut_s, cut_e, own_s, own_e, audio, ck, resp in chunks:
         est = max(10.0, cut_e - cut_s) / 3600 * price
         if resp is None:
             data = [("model", model), ("response_format", "verbose_json"), ("temperature", "0"),
@@ -149,6 +154,10 @@ def transcribe_groq(audio_path: Path, language: str | None, processed: Path,
             resp = _cloud.request("POST", GROQ_URL, headers={"Authorization": f"Bearer {key}"},
                                   data=data, files={"file": ("audio.flac", audio, "audio/flac")},
                                   timeout=600)
+            # never cache something that is not a transcription
+            if not isinstance(resp, dict) or not isinstance(resp.get("segments"), list):
+                raise _cloud.CloudError(f"groq returned no segments: keys "
+                                        f"{sorted(resp) if isinstance(resp, dict) else type(resp).__name__}")
             _cloud.cache_put_json("groq", ck, resp)
             _cloud.log_usage(processed, "groq", model, est, cached=False,
                              detail={"chunk": [round(cut_s, 1), round(cut_e, 1)]})

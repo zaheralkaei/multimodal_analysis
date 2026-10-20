@@ -58,3 +58,10 @@ def fake_metadata(tmp_processed):
     }
     (tmp_processed / "metadata.json").write_text(json.dumps(meta))
     return tmp_processed
+
+@pytest.fixture(autouse=True)
+def _no_real_cloud(monkeypatch):
+    """Tests must never reach a paid service: no keys, no client uploads."""
+    for k in ("OPENROUTER_API_KEY", "FAL_KEY", "GROQ_API_KEY", "REPLICATE_API_TOKEN"):
+        monkeypatch.setenv(k, "")
+    monkeypatch.setenv("FAL_UPLOAD", "datauri")

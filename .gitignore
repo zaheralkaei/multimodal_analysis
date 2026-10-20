@@ -35,6 +35,7 @@ reports/calib_*/
 
 # Round 11 audio stack: response cache (paid results, may be large) + per-video files
 data/cache/
+data/cache_fake/
 data/*/music_structure.json
 data/*/sections.csv
 data/*/separation_stats.json

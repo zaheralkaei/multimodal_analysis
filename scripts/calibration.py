@@ -6,9 +6,11 @@ Unit tests check modules one by one; this checks them together. It builds a
 pipeline on it, and scores the outputs against the ground truth.
 
     python scripts/calibration.py run          # make + run pipeline (offline) + score
-    python scripts/calibration.py run --cloud  # same, but the audio stack uses the hosted
-                                               # services (needs FAL_KEY, GROQ_API_KEY,
-                                               # REPLICATE_API_TOKEN; ~$0.15)
+    python scripts/calibration.py run --fake-cloud  # every hosted-service code path against
+                                                    # the local fake server (free)
+    python scripts/calibration.py run --cloud  # same through the REAL services: OpenRouter
+                                               # vision + fal + Groq + Replicate (needs all
+                                               # four keys; ~$0.17 in total)
     python scripts/calibration.py make         # only build data/raw/calib_v1.mp4 + truth
     python scripts/calibration.py score        # only score data/calib_v1/
 
@@ -287,6 +289,7 @@ def make(out_mp4: Path) -> dict:
                         "-crf", "16", "-r", str(FPS), "-c:a", "aac", "-b:a", "192k",
                         "-shortest", str(out_mp4)], check=True, timeout=600)
     gt = ground_truth(speech)
+    gt["version"] = out_mp4.stem          # scoring finds the video by this id
     gt_path = out_mp4.with_suffix(".truth.json")
     gt_path.write_text(json.dumps(gt, indent=2) + "\n", encoding="utf-8")
     print(f"[ok] calibration video {disp(out_mp4)} (speech: {'yes' if speech else 'no TTS engine'})")
@@ -510,6 +513,12 @@ def score(processed: Path, gt: dict) -> dict:
     add("qa_false_alarms", len(heur) == 0, [i["message"] for i in heur], "0 heuristic cut alarms")
     crit = [i for i in qa["issues"] if i["severity"] == "critical" and i["check"] != "vision_mock"]
     add("qa_critical", len(crit) == 0, [i["message"] for i in crit], "no critical issues (mock vision allowed)")
+    vcov = (st.get("coverage") or {}).get("vision") or {}
+    if st.get("vision_provider") not in (None, "mock"):
+        # real (or fake-cloud) vision: every shot must have a parsed answer
+        add("vision_answers", (vcov.get("pct") or 0) >= 90, vcov, ">= 90% shots with a valid answer")
+    else:
+        add("vision_answers", None, vcov, ">= 90% shots with a valid answer", "mock vision")
 
     # frame timing: extracted 2 fps frame N must show the source at (N-1)/fps
     errs = frame_timing_errors(processed, gt)
@@ -545,6 +554,8 @@ def main() -> int:
     ap.add_argument("--id", default=CALIB_ID)
     ap.add_argument("--cloud", action="store_true",
                     help="use the hosted audio services (needs keys; ~$0.15)")
+    ap.add_argument("--fake-cloud", action="store_true",
+                    help="run every hosted-service code path against scripts/fake_cloud.py (free)")
     args = ap.parse_args()
     video = REPO_ROOT / "data" / "raw" / f"{args.id}.mp4"
     truth = video.with_suffix(".truth.json")
@@ -555,7 +566,20 @@ def main() -> int:
     if args.action == "run":
         cmd = [sys.executable, str(Path(__file__).parent / "run_pipeline.py"), str(video),
                "--id", args.id, "--provider", "mock"]
-        if args.cloud:
+        if args.fake_cloud:
+            import fake_cloud
+            gt0 = json.loads(truth.read_text(encoding="utf-8"))
+            _srv, base, _state, env = fake_cloud.start(
+                port=int(os.environ.get("FAKE_CLOUD_PORT", "8765")),
+                vocals_silence_before=MUSIC_END, speech=gt0.get("speech"))
+            os.environ.update(env)
+            print(f"[fake-cloud] serving fal/Groq/Replicate/OpenRouter at {base}")
+            cmd[cmd.index("mock")] = "openrouter"
+            cmd += ["--separation", "fal", "--asr-backend", "groq", "--sections", "replicate"]
+        elif args.cloud:
+            # the first real run checks ALL four services on known answers:
+            # OpenRouter vision (14 shots, ~$0.01) + fal + Groq + Replicate
+            cmd[cmd.index("mock")] = "openrouter"
             cmd += ["--separation", "fal", "--asr-backend", "groq", "--sections", "replicate"]
         else:
             # offline: exercise every step's wiring without any paid service
@@ -564,7 +588,14 @@ def main() -> int:
         rc = subprocess.run(cmd, cwd=str(REPO_ROOT)).returncode
         if rc != 0:
             print(f"[error] pipeline failed (exit {rc})")
+            if args.fake_cloud:
+                for line in _state.log:
+                    print(f"[fake-cloud] {line}")
             return 2
+        if args.fake_cloud and _state.log:
+            print("[fake-cloud] rejected requests:")
+            for line in _state.log:
+                print(f"   {line}")
     if args.action in ("score", "run"):
         gt = json.loads(truth.read_text(encoding="utf-8"))
         rep = score(processed, gt)

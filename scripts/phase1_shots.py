@@ -90,6 +90,19 @@ def nearest_existing_frame(idx: int, fps: int, frames_dir: Path) -> Path | None:
     return best[1] if best else None
 
 
+def _tc_seconds(tc) -> float:
+    """FrameTimecode -> seconds (scenedetect 0.7 property; 0.6 method)."""
+    v = getattr(tc, "seconds", None)
+    return float(v) if v is not None and not callable(v) else float(tc.get_seconds())
+
+
+def _tc_frames(tc) -> int:
+    v = getattr(tc, "frame_num", None)
+    if v is not None and not callable(v):
+        return int(v)
+    return int(tc.get_frames()) if hasattr(tc, "get_frames") else 0
+
+
 def detect_shots(video_path: Path, threshold: float, min_scene_len: int,
                  fps_extract: int, frames_dir: Path, n_extracted: int) -> tuple[list[dict], float, int]:
     """Run PySceneDetect ContentDetector on the video. Returns shot list."""
@@ -98,7 +111,7 @@ def detect_shots(video_path: Path, threshold: float, min_scene_len: int,
     # Open video
     video = open_video(str(video_path))
     fps = video.frame_rate
-    total_frames = video.duration.get_frames() if hasattr(video.duration, "get_frames") else 0
+    total_frames = _tc_frames(video.duration)
     print(f"[info] video: {video_path.name}, fps={fps:.2f}, frames={total_frames}")
 
     # Build scene manager + detector
@@ -113,13 +126,16 @@ def detect_shots(video_path: Path, threshold: float, min_scene_len: int,
 
     # Run detection
     sm.detect_scenes(video, show_progress=False)
-    scene_list = sm.get_scene_list()  # [(start, end), ...] as FrameTimecode pairs
+    # start_in_scene=True: a video WITHOUT any cut is one shot covering the
+    # whole video. The default returns [] for it, so a single-take speech or
+    # vlog got zero shots and no per-shot analysis at all (round-12 audit).
+    scene_list = sm.get_scene_list(start_in_scene=True)  # [(start, end), ...] FrameTimecodes
 
     # Convert to our shot schema
     shots = []
     for idx, (start_tc, end_tc) in enumerate(scene_list):
-        start_sec = start_tc.get_seconds()
-        end_sec = end_tc.get_seconds()
+        start_sec = _tc_seconds(start_tc)
+        end_sec = _tc_seconds(end_tc)
         # The end_tc is exclusive — last frame is actually the start of the next shot
         # So duration is end_sec - start_sec
         duration = end_sec - start_sec
@@ -209,10 +225,8 @@ def main() -> int:
     def _to_jsonable(o):
         if isinstance(o, Fraction):
             return float(o)
-        if hasattr(o, "get_seconds"):
-            return float(o.get_seconds())
-        if hasattr(o, "get_frames"):
-            return int(o.get_frames())
+        if hasattr(o, "seconds") or hasattr(o, "get_seconds"):
+            return _tc_seconds(o)
         return str(o)
 
     stats = {

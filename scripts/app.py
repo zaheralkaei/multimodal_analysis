@@ -199,6 +199,8 @@ def parse_options(form) -> tuple[list[str], str | None]:
         args += ["--provider", "mock"]  # offline rehearsal: no API calls, labelled MOCK
     if form.get("skip_phase5"):
         args.append("--skip-phase5")
+    if form.get("offline_audio"):
+        args.append("--offline")      # no fal / Groq / Replicate calls (free local audio path)
 
     wmodel = form.get("whisper_model", "small")
     if wmodel not in WHISPER_MODELS:
@@ -514,6 +516,7 @@ PAGE_HTML = """<!doctype html>
         <label><input type="checkbox" name="skip_phase2"> Skip vision captions (phase 2)</label>
         <label><input type="checkbox" name="mock_vision"> Test run: fake vision answers, no API cost</label>
         <label><input type="checkbox" name="skip_phase5"> Skip audio tagging (phase 5)</label>
+        <label><input type="checkbox" name="offline_audio"> Free audio only (no fal / Groq / Replicate)</label>
       </div>
       <button type="submit" class="go" id="go">Analyze</button>
       <span class="msg" id="msg"></span>

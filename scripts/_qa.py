@@ -150,7 +150,9 @@ def check_music(music_summary: dict, route: dict | None) -> list:
 def check_transcript(transcript: list, clap: list, transcript_stats: dict) -> list:
     out = []
     lp = transcript_stats.get("language_probability")
-    if lp is not None and float(lp) < 0.5:
+    has_words = any(str(s.get("suspect", "")).lower() != "true" and s.get("text", "").strip()
+                    for s in transcript)
+    if lp is not None and float(lp) < 0.5 and has_words:
         out.append(_issue("warning", "language", f"Language detection uncertain "
                           f"({transcript_stats.get('language')}, p={float(lp):.2f}) — "
                           f"consider forcing --whisper-language"))
@@ -269,6 +271,9 @@ def check_audio_stack(audio_stack: dict | None, structure: dict | None, route: d
                           "No vocal separation: lyrics were transcribed from the full mix "
                           "(set FAL_KEY or --separation local for better lyrics)"))
     st = structure or {}
+    if st.get("fallback_reason"):
+        out.append(_issue("warning", "structure_fallback", st["fallback_reason"]
+                          + " — sections come from the local (unlabelled) method instead"))
     if st and not st.get("skipped"):
         if not st.get("downbeats"):
             out.append(_issue("info", "downbeats", "No downbeats (beat tracker without bar "

@@ -84,6 +84,7 @@ STOP_SEQUENCES = ["###", "Question:"]
 # Retry policy for transient API failures (rate limits / gateway errors).
 RETRY_STATUS = {408, 429, 500, 502, 503, 504}
 MAX_RETRIES = 4
+MAX_CONSECUTIVE_ERRORS = 5     # stop calling after this many failures in a row
 
 # Running token/cost account for the whole phase (filled from API `usage`).
 USAGE = {"prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0, "retries": 0}
@@ -304,7 +305,8 @@ def parse_json_response(raw: str) -> dict:
     return cleaned
 
 
-def _reusable(row: dict, mid_rel: str, model: str, mid_sha: str | None = None) -> bool:
+def _reusable(row: dict, mid_rel: str, model: str, mid_sha: str | None = None,
+              endpoint: str | None = None) -> bool:
     """Keep a previously analyzed row only if it is still valid: same
     mid-frame, same model (rows from before the model column are accepted),
     and not an error/parse-error/budget/mock row."""
@@ -315,6 +317,10 @@ def _reusable(row: dict, mid_rel: str, model: str, mid_sha: str | None = None) -
     if row.get("mid_frame_sha") != mid_sha:
         return False
     if row.get("model") and row.get("model") != model:
+        return False
+    # an answer from another endpoint (e.g. the offline fake-cloud server)
+    # must never be reused by a real run
+    if endpoint and row.get("endpoint") and row.get("endpoint") != endpoint:
         return False
     if row.get("status") in ("error", "parse_error", "budget", "mock"):
         return False
@@ -378,11 +384,22 @@ def _count_pending(shots: list[dict], out_csv: Path, model: str) -> int:
                                                    model, sha(s))))
 
 
+def _atomic_write_csv(path: Path, cols: list, rows_by_idx: dict) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
+        w.writeheader()
+        for i in sorted(rows_by_idx):
+            w.writerow(rows_by_idx[i])
+    os.replace(tmp, path)
+
+
 def analyze_shots(provider: str, model: str, shots: list[dict], frames_dir: Path,
                   out_csv: Path, max_usd: float | None = None) -> tuple[list[dict], dict]:
     """For each shot, ask the combined JSON-mode prompt once. Saves incrementally."""
     rows = []
     stats = {"calls": 0, "errors": 0, "parse_errors": 0, "total_seconds": 0.0, "skipped": []}
+    consecutive_errors, stopped = 0, False
 
     # Resume support: load any existing rows from out_csv. A shot is re-analyzed
     # when its mid_frame changed (AUDIT_R4: phase 1 mid-frame fix can shift
@@ -399,73 +416,104 @@ def analyze_shots(provider: str, model: str, shots: list[dict], frames_dir: Path
             print(f"[info] resuming from existing CSV: {len(existing)} shots already done")
 
     cols = (["shot_idx", "start_sec", "end_sec", "duration_sec", "mid_frame"]
-            + [q[0] for q in QUESTIONS] + ["emotion_raw", "status", "model", "mid_frame_sha"])
+            + [q[0] for q in QUESTIONS] + ["emotion_raw", "status", "model", "mid_frame_sha",
+                                           "endpoint"])
 
-    with out_csv.open("w", encoding="utf-8", newline="") as f_out:
-        writer = csv.DictWriter(f_out, fieldnames=cols)
-        writer.writeheader()
-        for i, shot in enumerate(shots):
-            mid_rel = shot.get("mid_frame_path", "")
-            mid_sha = _image_sha(REPO_ROOT / mid_rel) if mid_rel else None
-            stale_row = existing.get(i)
-            if stale_row is not None and _reusable(stale_row, mid_rel, model, mid_sha):
-                stale_row = {k: v for k, v in stale_row.items() if k in cols}
-                rows.append(stale_row)
-                writer.writerow(stale_row)
-                continue
-            mid_path = REPO_ROOT / mid_rel
-            if not mid_rel or not mid_path.exists():
-                print(f"[warn] shot {i}: mid-frame missing: {mid_path}", flush=True)
-                stats["skipped"].append(i)
-                continue
-            b64 = encode_image(mid_path)
-            row = {
-                "shot_idx": i,
-                "start_sec": shot["start_sec"],
-                "end_sec": shot["end_sec"],
-                "duration_sec": shot["duration_sec"],
-                "mid_frame": mid_rel,
-                "model": model,
-                "mid_frame_sha": mid_sha,
-            }
-            if max_usd is not None and USAGE["cost_usd"] >= max_usd:
-                row["caption"] = f"[error: budget {max_usd:.2f} USD reached]"
-                row["status"] = "budget"
-                stats["errors"] += 1
-                rows.append(row)
-                writer.writerow(row)
-                continue
-            try:
-                raw, secs = call_llm(provider, model, COMBINED_PROMPT, b64)
-                parsed = parse_json_response(raw)
-                if "_parse_error" in parsed:
-                    row["caption"] = f"[parse_error: {parsed['_parse_error']}]"
-                    row["status"] = "parse_error"
-                    stats["parse_errors"] += 1
-                else:
-                    row["status"] = "mock" if provider == "mock" else "ok"
-                    for qname, _ in QUESTIONS:
-                        v = parsed.get(qname, "")
-                        if qname == "emotion":
-                            # keep the model's own words for auditing the mapping
-                            row["emotion_raw"] = v
-                            if NORMALIZE_EMOTIONS and v:
-                                v = _normalize_emotion_raw(v)
-                        row[qname] = v
-                stats["calls"] += 1
-                stats["total_seconds"] += secs
-            except Exception as e:
-                row["caption"] = f"[error: {e}]"
-                row["status"] = "error"
-                stats["errors"] += 1
+    # Every known answer stays in `table` and the WHOLE file is rewritten
+    # atomically after each new answer (round-12 audit): writing the file top
+    # to bottom lost every not-yet-reached row when a re-run was interrupted,
+    # i.e. answers that had already been paid for.
+    table = {i: {k: v for k, v in r.items() if k in cols} for i, r in existing.items()}
+    decided: dict[int, dict] = {}
+
+    class _Store:
+        def writerow(self, row):
+            decided[int(row["shot_idx"])] = row
+            table[int(row["shot_idx"])] = row
+            _atomic_write_csv(out_csv, cols, table)
+    writer = _Store()
+    for i, shot in enumerate(shots):
+        mid_rel = shot.get("mid_frame_path", "")
+        mid_sha = _image_sha(REPO_ROOT / mid_rel) if mid_rel else None
+        stale_row = existing.get(i)
+        if stale_row is not None and _reusable(stale_row, mid_rel, model, mid_sha,
+                                               endpoint_for(provider)):
+            stale_row = {k: v for k, v in stale_row.items() if k in cols}
+            rows.append(stale_row)
+            writer.writerow(stale_row)
+            continue
+        mid_path = REPO_ROOT / mid_rel
+        if not mid_rel or not mid_path.exists():
+            print(f"[warn] shot {i}: mid-frame missing: {mid_path}", flush=True)
+            stats["skipped"].append(i)
+            continue
+        b64 = encode_image(mid_path)
+        row = {
+            "shot_idx": i,
+            "start_sec": shot["start_sec"],
+            "end_sec": shot["end_sec"],
+            "duration_sec": shot["duration_sec"],
+            "mid_frame": mid_rel,
+            "model": model,
+            "mid_frame_sha": mid_sha,
+            "endpoint": endpoint_for(provider),
+        }
+        if stopped:
+            row["caption"] = "[error: not attempted after repeated API errors]"
+            row["status"] = "error"
+            stats["errors"] += 1
             rows.append(row)
             writer.writerow(row)
-            f_out.flush()
-            if (i + 1) % 5 == 0 or i == len(shots) - 1:
-                print(f"  [{i+1}/{len(shots)}] shots analyzed "
-                      f"(avg {stats['total_seconds']/max(1, stats['calls']):.1f}s/call, "
-                      f"{stats['parse_errors']} parse errors)",
-                      flush=True)
+            continue
+        if max_usd is not None and USAGE["cost_usd"] >= max_usd:
+            row["caption"] = f"[error: budget {max_usd:.2f} USD reached]"
+            row["status"] = "budget"
+            stats["errors"] += 1
+            rows.append(row)
+            writer.writerow(row)
+            continue
+        try:
+            raw, secs = call_llm(provider, model, COMBINED_PROMPT, b64)
+            parsed = parse_json_response(raw)
+            if "_parse_error" in parsed:
+                row["caption"] = f"[parse_error: {parsed['_parse_error']}]"
+                row["status"] = "parse_error"
+                stats["parse_errors"] += 1
+            else:
+                row["status"] = "mock" if provider == "mock" else "ok"
+                for qname, _ in QUESTIONS:
+                    v = parsed.get(qname, "")
+                    if qname == "emotion":
+                        # keep the model's own words for auditing the mapping
+                        row["emotion_raw"] = v
+                        if NORMALIZE_EMOTIONS and v:
+                            v = _normalize_emotion_raw(v)
+                    row[qname] = v
+            stats["calls"] += 1
+            stats["total_seconds"] += secs
+        except Exception as e:
+            row["caption"] = f"[error: {e}]"
+            row["status"] = "error"
+            stats["errors"] += 1
+            consecutive_errors += 1
+        else:
+            # an unparseable answer is PAID and useless: counts as a failure too
+            consecutive_errors = consecutive_errors + 1 if row["status"] == "parse_error" else 0
+        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS and not stopped:
+            # a bad key, a removed model, an outage, or a model that never
+            # answers in JSON: stop calling (rows are retried on the next run)
+            print(f"[error] {consecutive_errors} consecutive failed answers — stopping phase 2 "
+                  f"calls; last: {row['caption'][:120]}", flush=True)
+            stats["stopped_after_errors"] = True
+            stopped = True
+        rows.append(row)
+        writer.writerow(row)
+        if (i + 1) % 5 == 0 or i == len(shots) - 1:
+            print(f"  [{i+1}/{len(shots)}] shots analyzed "
+                  f"(avg {stats['total_seconds']/max(1, stats['calls']):.1f}s/call, "
+                  f"{stats['parse_errors']} parse errors)",
+                  flush=True)
+    _atomic_write_csv(out_csv, cols, decided)       # final file: current shots only
     return rows, stats
 
 
@@ -532,6 +580,12 @@ def main() -> int:
               + COMBINED_PROMPT)
         return 0
 
+    if n_todo == 0:
+        print("[info] every shot already has a valid answer — no model calls needed")
+        rows, stats = analyze_shots(provider, args.model, shots, PROCESSED / "frames", out_csv)
+        _write_stats_and_lineage(provider, args, endpoint, shots, stats, shots_path, out_csv)
+        return 0
+
     # Quick health check
     print(f"[info] testing model ...", flush=True)
     dummy_path = PROCESSED / "_healthcheck.jpg"
@@ -559,27 +613,7 @@ def main() -> int:
           f"{len(shots)} total calls", flush=True)
     rows, stats = analyze_shots(provider, args.model, shots, PROCESSED / "frames", out_csv,
                                 max_usd=args.max_usd if provider == "openrouter" else None)
-
-    # Persist what was ACTUALLY used — phases 7/8 read this (AUDIT_R4 F4)
-    stats.update({
-        "provider": provider,
-        "model": args.model,
-        "endpoint": endpoint,
-        "n_shots": len(shots),
-        "usage": dict(USAGE),
-        "is_mock": provider == "mock",
-        "prompt": COMBINED_PROMPT,
-        "temperature": 0,
-        "seed": 42,
-        "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
-    })
-    stats_path = PROCESSED / "shot_vision_stats.json"
-    stats_path.write_text(json.dumps(stats, indent=2) + "\n", encoding="utf-8")
-    import hashlib
-    from _lineage import record
-    record(PROCESSED, "phase2", [shots_path, PROCESSED / "metadata.json"], [out_csv, stats_path],
-           {"provider": provider, "model": args.model, "temperature": 0, "seed": 42,
-            "prompt_sha": hashlib.sha256(COMBINED_PROMPT.encode()).hexdigest()}, __file__)
+    _write_stats_and_lineage(provider, args, endpoint, shots, stats, shots_path, out_csv)
 
     print(f"\n[ok] wrote {disp(out_csv)} ({len(rows)} rows, "
           f"{stats['calls']} successful calls, {stats['parse_errors']} parse errors, "
@@ -594,8 +628,35 @@ def main() -> int:
           f"({stats['total_seconds']/60:.1f} min, "
           f"avg {stats['total_seconds']/max(1,stats['calls']):.1f}s/call)")
 
+    if stats.get("stopped_after_errors"):
+        print("[error] phase 2 stopped after repeated API errors — check the key/model "
+              "(preflight.py --online); answered shots are kept and reused next run")
+        return 1
     print(f"\n[next] Phase 3: python scripts/phase3_camera.py")
     return 0
+
+
+def _write_stats_and_lineage(provider, args, endpoint, shots, stats, shots_path, out_csv):
+    """Persist what was ACTUALLY used — phases 7/8 read this (AUDIT_R4 F4)."""
+    import hashlib
+    from _lineage import record
+    stats.update({
+        "provider": provider,
+        "model": args.model,
+        "endpoint": endpoint,
+        "n_shots": len(shots),
+        "usage": dict(USAGE),
+        "is_mock": provider == "mock",
+        "prompt": COMBINED_PROMPT,
+        "temperature": 0,
+        "seed": 42,
+        "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+    })
+    stats_path = PROCESSED / "shot_vision_stats.json"
+    stats_path.write_text(json.dumps(stats, indent=2) + "\n", encoding="utf-8")
+    record(PROCESSED, "phase2", [shots_path, PROCESSED / "metadata.json"], [out_csv, stats_path],
+           {"provider": provider, "model": args.model, "temperature": 0, "seed": 42,
+            "prompt_sha": hashlib.sha256(COMBINED_PROMPT.encode()).hexdigest()}, __file__)
 
 
 if __name__ == "__main__":

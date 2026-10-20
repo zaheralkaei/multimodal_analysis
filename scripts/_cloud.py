@@ -21,7 +21,8 @@ import datetime, hashlib, json, os, time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-CACHE_DIR = REPO_ROOT / "data" / "cache"
+# Paid answers live here; the fake-cloud test server uses its own folder
+CACHE_DIR = Path(os.environ.get("CLOUD_CACHE_DIR", REPO_ROOT / "data" / "cache"))
 
 RETRY_STATUS = {408, 409, 429, 500, 502, 503, 504}
 
@@ -164,6 +165,8 @@ def spent(processed: Path) -> float:
 
 
 def budget_ok(processed: Path, est_usd: float) -> tuple[bool, str]:
+    if est_usd <= 0:
+        return True, ""                  # nothing new to pay for (e.g. all cached)
     cap = float(os.environ.get("AUDIO_MAX_USD", "1.0"))
     already = spent(processed)
     if already + est_usd > cap:

@@ -159,6 +159,13 @@ def main() -> int:
         print(f"[route] sampling up to {N_WINDOWS} x {WINDOW_SEC:g}s windows of {disp(audio)} with CLAP")
         shares, per_window = measure_shares(audio)
     route = decide(shares, args.content_type)
+    meta_p = PROCESSED / "metadata.json"
+    if meta_p.exists() and json.loads(meta_p.read_text(encoding="utf-8")).get("has_audio") is False:
+        route["reasons"].insert(0, "WARNING: the video has no audio track (silent audio was "
+                                   "substituted) — all audio results describe silence")
+        route["has_music"] = False
+        route["modules"].update({"beat_analysis": False, "cut_on_beat_test": False,
+                                 "music_mood": False, "key_detection": False})
     route["sampled_windows"] = per_window
     route["audio_file"] = disp(audio)
 

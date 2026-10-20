@@ -190,6 +190,24 @@ def media_timeout(duration_sec: float) -> int:
     return int(max(300, 2 * (duration_sec or 0)))
 
 
+def has_audio_stream(video: Path) -> bool:
+    """ffmpeg lists the input's streams on stderr ("Stream #0:1: Audio: ...")."""
+    r = subprocess.run([ffmpeg_exe() or "ffmpeg", "-hide_banner", "-i", str(video)],
+                       capture_output=True, text=True, errors="replace", timeout=60)
+    return " Audio:" in r.stderr
+
+
+def write_silence(out_wav: Path, seconds: float, sample_rate: int) -> None:
+    """A video without an audio track still gets (silent) audio files of the
+    right length, so every audio phase runs and reports 'silence' instead of
+    crashing (round-12 audit)."""
+    import numpy as np
+    import soundfile as sf
+    out_wav.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(str(out_wav), np.zeros(int(max(seconds, 0.1) * sample_rate), np.int16),
+             sample_rate, subtype="PCM_16")
+
+
 def extract_audio(video: Path, out_wav: Path, sample_rate: int = 16000,
                   timeout: int = 300) -> None:
     """Extract mono PCM audio at the given sample rate."""
@@ -263,9 +281,16 @@ def main() -> int:
     # extract audio + frames in parallel (sequential here for simplicity)
     audio_wav = PROCESSED / AUDIO_SPEECH[0]
     tmo = media_timeout(meta.get("duration_sec", 0))
-    extract_audio(video, audio_wav, AUDIO_SPEECH[1], timeout=tmo)
     music_wav = PROCESSED / AUDIO_MUSIC[0]
-    extract_audio(video, music_wav, AUDIO_MUSIC[1], timeout=tmo)
+    meta["has_audio"] = has_audio_stream(video)
+    if meta["has_audio"]:
+        extract_audio(video, audio_wav, AUDIO_SPEECH[1], timeout=tmo)
+        extract_audio(video, music_wav, AUDIO_MUSIC[1], timeout=tmo)
+    else:
+        print("[warn] the video has NO audio track — writing silent audio so the audio "
+              "phases run and report silence")
+        write_silence(audio_wav, meta.get("duration_sec", 0), AUDIO_SPEECH[1])
+        write_silence(music_wav, meta.get("duration_sec", 0), AUDIO_MUSIC[1])
     n_frames = extract_frames(video, FRAMES_DIR, args.fps, timeout=tmo)
     meta["frames_extracted"] = n_frames
     meta["frame_fps"] = args.fps

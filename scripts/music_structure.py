@@ -41,7 +41,7 @@ if "PROCESSED_DIR" in os.environ:
     PROCESSED = Path(os.environ["PROCESSED_DIR"])
 
 REPLICATE_MODEL = "sakemin/all-in-one-music-structure-analyzer"
-REPLICATE_API = "https://api.replicate.com/v1"
+REPLICATE_API = os.environ.get("REPLICATE_API_BASE", "https://api.replicate.com/v1").rstrip("/")
 NOVELTY_KERNEL_BEATS = 16
 MIN_SECTION_BEATS = 16
 
@@ -111,6 +111,9 @@ def sections_local(audio: Path, beats: list, downbeats: list, regions: list | No
     bf = librosa.time_to_frames(beats, sr=sr, hop_length=hop)
     feat = np.vstack([librosa.util.normalize(librosa.util.sync(mf, bf, aggregate=np.median), axis=1),
                       librosa.util.sync(ch, bf, aggregate=np.median)])
+    # sync() returns one column per interval incl. the one BEFORE the first
+    # beat; drop it so column k = the interval starting at beat k
+    feat = feat[:, 1:]
     feat = feat / (np.linalg.norm(feat, axis=0, keepdims=True) + 1e-9)
     S = feat.T @ feat
     L = NOVELTY_KERNEL_BEATS
@@ -121,7 +124,7 @@ def sections_local(audio: Path, beats: list, downbeats: list, regions: list | No
     nov = np.array([np.sum(Sp[i:i + 2 * L, i:i + 2 * L] * K) for i in range(n)])
     nov = (nov - nov.min()) / (np.ptp(nov) + 1e-9)
     thr = nov.mean() + 0.5 * nov.std()
-    peaks, last = [], -MIN_SECTION_BEATS
+    peaks = []
     for i in np.argsort(-nov):
         if nov[i] < thr:
             break
@@ -170,7 +173,7 @@ def replicate_allin1(audio: Path, processed: Path) -> dict:
     version = (model.get("latest_version") or {}).get("id")
     if not version:
         raise _cloud.CloudError(f"cannot read the latest version of {REPLICATE_MODEL}")
-    ck = _cloud.cache_key("replicate_allin1", _cloud.sha_file(audio), version)
+    ck = _cloud.cache_key("replicate_allin1", REPLICATE_API, _cloud.sha_file(audio), version)
     cached = _cloud.cache_get_json("replicate_allin1", ck)
     est = _cloud.PRICES["replicate_allin1_per_run"]
     if cached is not None:
@@ -224,11 +227,19 @@ def parse_allin1_output(output, token: str | None = None) -> dict:
                 return v
         output = [v for v in output.values() if isinstance(v, str)]
     urls = [output] if isinstance(output, str) else [u for u in (output or []) if isinstance(u, str)]
-    for u in urls:
-        if u.split("?")[0].endswith(".json"):
+    # JSON-looking files first, then any other file (the wrapper's naming is
+    # undocumented); images/audio are skipped by extension
+    skip = (".png", ".jpg", ".jpeg", ".svg", ".pdf", ".wav", ".mp3", ".flac", ".npy")
+    ordered = ([u for u in urls if u.split("?")[0].endswith(".json")]
+               + [u for u in urls if not u.split("?")[0].endswith(".json")
+                  and not u.split("?")[0].lower().endswith(skip)])
+    for u in ordered:
+        try:
             data = _cloud.request("GET", u, headers=_replicate_headers(token) if token else None)
-            if has_fields(data):
-                return data
+        except _cloud.CloudError:
+            continue
+        if has_fields(data):
+            return data
     raise _cloud.CloudError(f"unrecognised All-In-One output: {str(output)[:200]}")
 
 
@@ -280,11 +291,13 @@ def main() -> int:
             regions = music_regions(rows)
 
     allin1 = None
+    fallback_reason = None
     try:
         if "replicate" in (beats_opt, sections_opt):
             allin1 = replicate_allin1(audio, PROCESSED)
     except _cloud.CloudError as e:
-        print(f"[warn] replicate All-In-One failed: {e} — falling back to local")
+        fallback_reason = f"Replicate All-In-One failed: {str(e)[:200]}"
+        print(f"[warn] {fallback_reason} — falling back to local")
         beats_opt = "beat_this" if beats_opt == "replicate" else beats_opt
         sections_opt = "local" if sections_opt == "replicate" else sections_opt
         if beats_opt == "beat_this":
@@ -315,6 +328,7 @@ def main() -> int:
         "segments": segments, "sections_source": sections_opt, "sections_labelled": labelled,
         "music_regions": regions, "n_beats_masked": n_before - len(beats),
         "replicate_version": (allin1 or {}).get("replicate_version"),
+        "fallback_reason": fallback_reason,
     }
     out.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     from _lineage import record

@@ -202,7 +202,7 @@ makes API calls (using your `.env` OpenRouter key); everything else runs locally
 ### Testing without spending money
 
 ```bash
-python -m pytest -q                         # 237 unit/integration tests, all offline
+python -m pytest -q                         # ~260 unit/integration tests, all offline, never reach a paid service
 python scripts/preflight.py --online --id <video_id>   # environment + model + price
 python scripts/run_pipeline.py URL --id test_run --provider mock   # full offline rehearsal
 python scripts/run_pipeline.py URL --vision-dry-run                # real model check, no calls
@@ -257,8 +257,9 @@ answer (120 BPM music, cuts on and off the beat, designed pans/tilts/zooms,
 synthetic speech, silence). The whole pipeline must recover it:
 
 ```bash
-python scripts/calibration.py run          # ~5 min, offline; exits 1 on any failed check
-python scripts/calibration.py run --cloud  # same through fal/Groq/Replicate (~$0.15)
+python scripts/calibration.py run              # ~5 min, offline; exits 1 on any failed check
+python scripts/calibration.py run --fake-cloud # every paid code path against a local fake server (free)
+python scripts/calibration.py run --cloud      # the real services: OpenRouter + fal + Groq + Replicate (~$0.17)
 ```
 
 It found three real bugs on its first runs (frame timing off by 0.21 s,
@@ -476,6 +477,7 @@ optical flow (already done in phase 3) for camera motion — see
 - [docs/AUDIT_R9.md](docs/AUDIT_R9.md) — round-9 general audit (security, reproducibility)
 - [docs/ROUND10_INTEGRATION.md](docs/ROUND10_INTEGRATION.md) — round-10 lineage, routing, coverage, QA, calibration video
 - [docs/ROUND11_AUDIO.md](docs/ROUND11_AUDIO.md) — round-11 cloud audio stack (separation, Groq, beats/downbeats/sections)
+- [docs/AUDIT_R12_PRESPEND.md](docs/AUDIT_R12_PRESPEND.md) — round-12 pre-spend audit: fake cloud, fault injection, edge cases, first paid sequence
 
 - [docs/METHODOLOGY_REVIEW.md](docs/METHODOLOGY_REVIEW.md) — alternatives
   to current shot detection, camera motion, transcription (free + paid)

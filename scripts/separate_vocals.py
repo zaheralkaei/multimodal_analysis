@@ -37,6 +37,8 @@ if "PROCESSED_DIR" in os.environ:
     PROCESSED = Path(os.environ["PROCESSED_DIR"])
 
 FAL_ENDPOINT = "fal-ai/demucs"
+# Overridable for the offline fake-cloud test server (scripts/fake_cloud.py)
+FAL_QUEUE_BASE = os.environ.get("FAL_QUEUE_BASE", "https://queue.fal.run").rstrip("/")
 FAL_MODEL = "htdemucs_ft"
 MAX_UPLOAD_MB = 25          # data-URI upload; longer audio should not need separation
 ACTIVE_DBFS = -40.0         # vocal stem louder than this in a second -> someone sings/speaks
@@ -48,7 +50,8 @@ def separate_fal(mix: Path, out_stem: Path, processed: Path) -> dict:
     key = _cloud.get_key("FAL_KEY")
     if not key:
         raise _cloud.CloudError("FAL_KEY is not set (.env)")
-    ck = _cloud.cache_key("fal_demucs", _cloud.sha_file(mix), FAL_MODEL, ["vocals"], "wav")
+    ck = _cloud.cache_key("fal_demucs", FAL_QUEUE_BASE, _cloud.sha_file(mix), FAL_MODEL,
+                          ["vocals"], "wav")
     cached = _cloud.cache_path("fal_demucs", ck, ".wav")
     dur = _duration(mix)
     est = dur * _cloud.PRICES["fal_demucs_per_sec"]
@@ -67,21 +70,29 @@ def separate_fal(mix: Path, out_stem: Path, processed: Path) -> dict:
         raise _cloud.CloudError(f"mix is {size_mb:.0f} MB as MP3 (> {MAX_UPLOAD_MB} MB data-URI "
                                 f"limit) — use --provider off or local for long videos")
     headers = {"Authorization": f"Key {key}", "Content-Type": "application/json"}
-    body = {"audio_url": _cloud.data_uri(mp3, "audio/mpeg"), "model": FAL_MODEL,
+    body = {"audio_url": upload_for_fal(mp3), "model": FAL_MODEL,
             "stems": ["vocals"], "output_format": "wav"}
     mp3.unlink(missing_ok=True)
-    sub = _cloud.request("POST", f"https://queue.fal.run/{FAL_ENDPOINT}", headers=headers,
+    sub = _cloud.request("POST", f"{FAL_QUEUE_BASE}/{FAL_ENDPOINT}", headers=headers,
                          json_body=body, timeout=300)
     rid = sub.get("request_id")
-    status_url = sub.get("status_url") or f"https://queue.fal.run/{FAL_ENDPOINT}/requests/{rid}/status"
-    response_url = sub.get("response_url") or f"https://queue.fal.run/{FAL_ENDPOINT}/requests/{rid}"
+    if not rid:
+        raise _cloud.CloudError(f"fal submit returned no request_id: keys {sorted(sub)}")
+    # use the URLs fal returns: they are scoped to owner/app, and building
+    # them from the full endpoint path returns 405 (fal queue docs)
+    status_url = sub.get("status_url") or f"{FAL_QUEUE_BASE}/fal-ai/demucs/requests/{rid}/status"
+    response_url = sub.get("response_url") or f"{FAL_QUEUE_BASE}/fal-ai/demucs/requests/{rid}"
     deadline = time.time() + 1800
     while True:
         st = _cloud.request("GET", status_url, headers=headers, timeout=60)
         status = st.get("status", "")
         if status == "COMPLETED":
+            # a failed job ALSO ends as COMPLETED, with error/error_type set
+            if st.get("error"):
+                raise _cloud.CloudError(f"fal demucs request {rid} failed: "
+                                        f"{st.get('error_type', '')} {str(st['error'])[:200]}")
             break
-        if status in ("FAILED", "ERROR", "CANCELLED") or time.time() > deadline:
+        if status not in ("IN_QUEUE", "IN_PROGRESS") or time.time() > deadline:
             raise _cloud.CloudError(f"fal demucs request {rid}: status {status or 'timeout'}")
         time.sleep(3)
     res = _cloud.request("GET", response_url, headers=headers, timeout=120)
@@ -89,11 +100,29 @@ def separate_fal(mix: Path, out_stem: Path, processed: Path) -> dict:
     if not vocals:
         raise _cloud.CloudError(f"fal demucs response has no vocals stem: keys {sorted(res)}")
     _cloud.download(vocals, out_stem)
+    try:                                   # never cache a stem that is not audio
+        if _duration(out_stem) < 0.5 * dur:
+            raise _cloud.CloudError(f"vocal stem is {_duration(out_stem):.1f}s for a {dur:.1f}s mix")
+    except RuntimeError as e:
+        raise _cloud.CloudError(f"vocal stem is not readable audio: {e}") from None
     cached.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(out_stem, cached)
     _cloud.log_usage(processed, "fal", "demucs", est, cached=False,
                      detail={"sec": round(dur, 1), "model": FAL_MODEL, "request_id": rid})
     return {"cached": False, "est_usd": round(est, 4), "request_id": rid}
+
+
+def upload_for_fal(path: Path) -> str:
+    """Official fal client upload (an https URL on fal storage) when the
+    package is installed; otherwise a base64 data URI, which fal model
+    endpoints accept for *_url inputs but which makes the request large."""
+    if os.environ.get("FAL_UPLOAD", "auto") != "datauri":
+        try:
+            import fal_client
+            return fal_client.upload_file(path)
+        except ImportError:
+            pass
+    return _cloud.data_uri(path, "audio/mpeg")
 
 
 def separate_local(mix: Path, out_stem: Path, processed: Path) -> dict:

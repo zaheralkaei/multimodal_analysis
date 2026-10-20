@@ -95,7 +95,32 @@ class TestSeparation:
         assert sep.resolve_provider("auto", {"has_music": False})[0] == "off"
         assert sep.resolve_provider("passthrough", None)[0] == "passthrough"
 
+    def test_upload_uses_official_client_when_installed(self, sep, tmp_path, monkeypatch):
+        import sys, types
+        fake = types.SimpleNamespace(upload_file=lambda path: "https://v3.fal.media/files/x.mp3")
+        monkeypatch.setitem(sys.modules, "fal_client", fake)
+        monkeypatch.delenv("FAL_UPLOAD", raising=False)
+        (tmp_path / "a.mp3").write_bytes(b"x")
+        assert sep.upload_for_fal(tmp_path / "a.mp3") == "https://v3.fal.media/files/x.mp3"
+        monkeypatch.setenv("FAL_UPLOAD", "datauri")
+        assert sep.upload_for_fal(tmp_path / "a.mp3").startswith("data:audio/mpeg;base64,")
+
+    def test_fal_completed_with_error_is_a_failure(self, sep, tmp_path, monkeypatch):
+        monkeypatch.setenv("FAL_UPLOAD", "datauri")
+        monkeypatch.setattr(sep._cloud, "get_key", lambda n: "fal-test")
+        monkeypatch.setattr(sep._cloud, "encode_audio",
+                            lambda src, dest, fmt, **k: dest.write_bytes(b"mp3") or dest)
+        def fake(method, url, **k):
+            if method == "POST":
+                return {"request_id": "r1", "status_url": "https://q/s", "response_url": "https://q/r"}
+            return {"status": "COMPLETED", "error": "input could not be decoded", "error_type": "bad_input"}
+        monkeypatch.setattr(sep._cloud, "request", fake)
+        with pytest.raises(sep._cloud.CloudError, match="failed"):
+            sep.separate_fal(tmp_path / "audio_music.wav", tmp_path / "stem.wav", tmp_path)
+        assert not (tmp_path / "cloud_usage.json").exists()      # nothing logged as paid output
+
     def test_fal_flow_cache_and_cost(self, sep, tmp_path, monkeypatch):
+        monkeypatch.setenv("FAL_UPLOAD", "datauri")
         monkeypatch.setattr(sep._cloud, "get_key", lambda n: "fal-test")
         monkeypatch.setattr(sep._cloud, "encode_audio",
                             lambda src, dest, fmt, **k: dest.write_bytes(b"mp3bytes") or dest)
@@ -347,3 +372,9 @@ def test_tempo_disagreement_flagged_but_octave_tolerated():
     assert ok == []                                   # half tempo: the usual ambiguity
     bad = qa.check_tempo_agreement({"tempo_bpm": 129.2}, {"bpm": 96.77, "beats_source": "beat_this"})
     assert bad and bad[0]["check"] == "tempo_disagreement"   # 4:3 — one tracker is wrong
+
+
+def test_web_ui_offline_audio_option():
+    import app as app_mod
+    args, err = app_mod.parse_options({"offline_audio": "on"})
+    assert err is None and "--offline" in args

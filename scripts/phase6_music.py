@@ -123,7 +123,7 @@ def analyze_music(audio_path: Path):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    args = parser.parse_args()
+    parser.parse_args()
 
     audio_path = PROCESSED / "audio_music.wav"
     band_limited = not audio_path.exists()
