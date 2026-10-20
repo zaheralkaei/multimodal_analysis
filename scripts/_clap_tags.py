@@ -53,7 +53,7 @@ TAG_GROUPS = {"mood": MOOD_TAGS, "section": SECTION_TAGS, "instrument": INSTRUME
 
 # Silence is decided by LOUDNESS, not by CLAP: on the round-10 calibration
 # video CLAP called a near-silent window "speech" (p=0.88).
-SILENCE_DBFS = -45.0
+SILENCE_DBFS = -50.0         # quiet acoustic passages reach ~-45 dBFS; true silence << -60
 
 
 def rms_dbfs(chunk) -> float:

@@ -189,7 +189,8 @@ def replicate_allin1(audio: Path, processed: Path) -> dict:
     mp3 = processed / "_upload_mix.mp3"
     _cloud.encode_audio(audio, mp3, "mp3")
     up = _cloud.request("POST", f"{REPLICATE_API}/files", headers=_replicate_headers(token),
-                        files={"content": ("mix.mp3", mp3.read_bytes(), "audio/mpeg")}, timeout=300)
+                        files={"content": ("mix.mp3", mp3.read_bytes(), "audio/mpeg")}, timeout=300,
+                        idempotent=True)   # uploads are free; a duplicate file is harmless
     mp3.unlink(missing_ok=True)
     file_url = (up.get("urls") or {}).get("get")
     if not file_url:

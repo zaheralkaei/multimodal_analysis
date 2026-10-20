@@ -78,6 +78,10 @@ def check_lineage(lineage: dict) -> list:
     if not lineage.get("has_lineage"):
         out.append(_issue("info", "lineage", "No lineage.json: outputs predate round 10, so "
                           "stale files cannot be detected. Re-run the pipeline once."))
+    missing = sorted({m["file"] for m in lineage.get("missing", [])})
+    if missing:
+        out.append(_issue("info", "lineage", f"Input files no longer present, so their "
+                          f"consistency cannot be re-checked: {', '.join(missing[:4])}"))
     for p in lineage.get("problems", []):
         what = ("an input changed after it ran" if p["kind"] == "stale"
                 else "its output was replaced afterwards")

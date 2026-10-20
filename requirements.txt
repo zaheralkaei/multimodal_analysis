@@ -24,6 +24,7 @@ torch>=2.0.0
 # Hosted audio services (round 11) — HTTP client
 requests>=2.31.0
 fal-client>=0.5.0           # official fal.ai upload helper (vocal separation)
+# optional: demucs          # only for --separation local (vocal separation on this CPU, slow)
 
 # Beats + downbeats on CPU (Beat This!, ISMIR 2024, MIT; ~78 MB checkpoint on first use)
 beat-this>=1.0.0
@@ -50,3 +51,4 @@ Flask>=3.0.0                 # local web UI (scripts/app.py)
 
 # Tests (dev)
 pytest>=8.0.0
+hypothesis>=6.0.0          # property-based tests (tests/test_properties.py)

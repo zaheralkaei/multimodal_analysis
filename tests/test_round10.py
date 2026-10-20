@@ -42,7 +42,7 @@ class TestLineage:
         assert lin.check(tmp_path)["problems"][0]["kind"] == "overwritten"
 
     def test_no_lineage_file(self, lin, tmp_path):
-        assert lin.check(tmp_path) == {"has_lineage": False, "problems": [], "ok_steps": []}
+        assert lin.check(tmp_path) == {"has_lineage": False, "problems": [], "ok_steps": [], "missing": []}
 
 
 # ---------------------------------------------------------------- routing
@@ -284,3 +284,29 @@ class TestCalibrationHelpers:
         rc = subprocess.run([sys.executable, str(Path(cal.__file__)), "run"],
                             cwd=str(Path(cal.__file__).parent.parent)).returncode
         assert rc == 0
+
+
+class TestLineagePortability:
+    """Round 13: moving the project or deleting the raw video must not make
+    every step 'stale'."""
+
+    def test_missing_input_is_not_stale(self, tmp_path):
+        lin = load_phase("_lineage")
+        (tmp_path / "in.mp4").write_text("v")
+        (tmp_path / "out.txt").write_text("o")
+        lin.record(tmp_path, "s", [tmp_path / "in.mp4"], [tmp_path / "out.txt"])
+        (tmp_path / "in.mp4").unlink()
+        res = lin.check(tmp_path)
+        assert res["problems"] == [] and res["missing"] == [{"step": "s", "file": "in.mp4"}]
+
+    def test_repo_files_stored_relative_to_repo(self, tmp_path):
+        lin = load_phase("_lineage")
+        key = lin._key(lin.REPO_ROOT / "data" / "raw" / "x.mp4", tmp_path)
+        assert key == "@repo/data/raw/x.mp4"
+        assert lin._resolve(key, tmp_path) == lin.REPO_ROOT / "data" / "raw" / "x.mp4"
+
+
+def test_speech_override_on_music_is_warned():
+    rc = load_phase("route_content")
+    r = rc.decide({"music": 0.57, "speech": 0.29, "silence": 0.14}, "speech")
+    assert r["has_music"] is False and any(x.startswith("WARNING") for x in r["reasons"])

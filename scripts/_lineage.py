@@ -27,6 +27,8 @@ import datetime, hashlib, json
 from pathlib import Path
 
 LINEAGE_FILE = "lineage.json"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_PREFIX = "@repo/"
 
 _CACHE: dict[tuple, str] = {}
 
@@ -49,15 +51,23 @@ def file_sha(path) -> str | None:
 
 
 def _key(path, processed: Path) -> str:
-    """Store paths relative to the video folder when possible (portable)."""
-    p = Path(path)
+    """Portable path: relative to the video folder, else to the repository
+    (round 13: absolute paths made every step 'stale' after the project
+    folder was moved or cloned), else absolute."""
+    p = Path(path).resolve()
     try:
-        return p.resolve().relative_to(processed.resolve()).as_posix()
+        return p.relative_to(Path(processed).resolve()).as_posix()
     except ValueError:
-        return str(p.resolve())
+        pass
+    try:
+        return REPO_PREFIX + p.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return str(p)
 
 
 def _resolve(key: str, processed: Path) -> Path:
+    if key.startswith(REPO_PREFIX):
+        return REPO_ROOT / key[len(REPO_PREFIX):]
     p = Path(key)
     return p if p.is_absolute() else processed / p
 
@@ -92,13 +102,18 @@ def check(processed, steps: list[str] | None = None) -> dict:
     """{'has_lineage': bool, 'problems': [{step, kind, file}], 'ok_steps': [...]}"""
     processed = Path(processed)
     data = load(processed)
-    out = {"has_lineage": bool(data), "problems": [], "ok_steps": []}
+    out = {"has_lineage": bool(data), "problems": [], "ok_steps": [], "missing": []}
     for step, rec in data.items():
         if steps is not None and step not in steps:
             continue
         bad = False
         for key, sha in rec.get("inputs", {}).items():
-            if file_sha(_resolve(key, processed)) != sha:
+            cur = file_sha(_resolve(key, processed))
+            if cur is None:
+                # deleted (e.g. the raw video removed to save space) is NOT
+                # changed: it cannot be verified, but nothing contradicts it
+                out["missing"].append({"step": step, "file": key})
+            elif cur != sha:
                 out["problems"].append({"step": step, "kind": "stale", "file": key})
                 bad = True
         for key, sha in rec.get("outputs", {}).items():

@@ -248,12 +248,24 @@ def analyze_video(video_path: Path, shots: list[dict], flow_fps: float) -> list[
 
     # native frame index -> shot index, for the frames we want to keep
     wanted: dict[int, int] = {}
+    last_of_shot: dict[int, int] = {}
     for i, s in enumerate(shots):
-        for fi in sample_frame_indices(float(s["start_sec"]), float(s["end_sec"]),
-                                       native_fps, flow_fps):
+        idx = sample_frame_indices(float(s["start_sec"]), float(s["end_sec"]), native_fps, flow_fps)
+        for fi in idx:
             wanted[fi] = i
+        if idx:
+            last_of_shot[i] = idx[-1]
     taken: dict[int, list[tuple[float, object]]] = {i: [] for i in range(len(shots))}
+    results: dict[int, dict] = {}
     last_wanted = max(wanted) if wanted else -1
+
+    def finish(i: int) -> None:
+        """Estimate shot i and FREE its frames (round-13 audit: keeping every
+        sampled frame of a 2-hour film needed ~3 GB of memory)."""
+        results[i] = _estimate_shot(i, shots[i], taken[i])
+        taken[i] = []
+        if (i + 1) % 10 == 0 or i == len(shots) - 1:
+            print(f"  [{i+1}/{len(shots)}] shots estimated")
 
     frame_idx = -1
     while frame_idx < last_wanted:
@@ -272,36 +284,36 @@ def analyze_video(video_path: Path, shots: list[dict], flow_fps: float) -> list[
                            interpolation=cv2.INTER_AREA)
         taken[shot_i].append((frame_idx / native_fps,
                               cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)))
+        if last_of_shot.get(shot_i) == frame_idx:
+            finish(shot_i)
     cap.release()
+    for i in range(len(shots)):            # shots with no frames, or a truncated video
+        if i not in results:
+            finish(i)
+    return [results[i] for i in range(len(shots))]
 
-    rows = []
-    for i, shot in enumerate(shots):
-        samples = taken[i]
-        base = {
-            "shot_idx": i,
-            "start_sec": shot["start_sec"],
-            "end_sec": shot["end_sec"],
-            "duration_sec": shot["duration_sec"],
-            "n_frames": len(samples),
-        }
-        if len(samples) < 2:
-            base.update(classify_shot([]))
-            base["camera_motion"] = "unknown"
-            rows.append(base)
-            continue
-        pairs = []
-        for (t1, g1), (t2, g2) in zip(samples, samples[1:]):
-            est = estimate_pair(g1, g2)
-            if est is None:
-                pairs.append(None)
-                continue
+
+def _estimate_shot(i: int, shot: dict, samples: list) -> dict:
+    """Camera estimate for one shot from its (time, grey frame) samples."""
+    base = {
+        "shot_idx": i,
+        "start_sec": shot["start_sec"],
+        "end_sec": shot["end_sec"],
+        "duration_sec": shot["duration_sec"],
+        "n_frames": len(samples),
+    }
+    if len(samples) < 2:
+        base.update(classify_shot([]))
+        base["camera_motion"] = "unknown"
+        return base
+    pairs = []
+    for (t1, g1), (t2, g2) in zip(samples, samples[1:]):
+        est = estimate_pair(g1, g2)
+        if est is not None:
             est.update(pair_rates(est, t2 - t1))
-            pairs.append(est)
-        base.update(classify_shot(pairs))
-        rows.append(base)
-        if (i + 1) % 10 == 0 or i == len(shots) - 1:
-            print(f"  [{i+1}/{len(shots)}] shots estimated")
-    return rows
+        pairs.append(est)
+    base.update(classify_shot(pairs))
+    return base
 
 
 CSV_COLS = ["shot_idx", "start_sec", "end_sec", "duration_sec", "n_frames",

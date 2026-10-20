@@ -114,3 +114,53 @@ def test_repeated_unparseable_answers_stop_paid_calls(tmp_path, monkeypatch):
     monkeypatch.setattr(p2, "call_llm", lambda *a, **k: calls.append(1) or ("", 0.0))
     rows, stats = p2.analyze_shots("openrouter", "m", shots, tmp_path, tmp_path / "v.csv")
     assert len(calls) == p2.MAX_CONSECUTIVE_ERRORS and stats["stopped_after_errors"]
+
+
+def test_no_key_for_silence():
+    """Round 13: silent/flat audio was reported as 'C major' with correlation -Infinity."""
+    import json
+    import numpy as np
+    p6 = load_phase("phase6_music")
+    assert p6.estimate_key(np.zeros(12)) == (None, None)
+    key, corr = p6.estimate_key(np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]))
+    assert key == "C major" and corr == pytest.approx(1.0)
+    json.dumps({"k": None}, allow_nan=False)
+
+
+def test_camera_shot_beyond_video_end_is_unknown(tmp_path):
+    """Streaming estimation must still return one row per shot, in order,
+    including shots that receive no frames (e.g. a truncated video)."""
+    p3 = load_phase("phase3_camera")
+    video = _static_video(tmp_path / "v.avi", seconds=2)
+    shots = [{"start_sec": 0.0, "end_sec": 1.0, "duration_sec": 1.0},
+             {"start_sec": 1.0, "end_sec": 2.0, "duration_sec": 1.0},
+             {"start_sec": 2.0, "end_sec": 5.0, "duration_sec": 3.0}]     # past the end
+    rows = p3.analyze_video(video, shots, flow_fps=8.0)
+    assert [r["shot_idx"] for r in rows] == [0, 1, 2]
+    assert rows[0]["camera_motion"] == "static" and rows[2]["camera_motion"] == "unknown"
+
+
+def test_dashboard_keeps_thumbnails_when_source_frames_deleted(tmp_path, monkeypatch):
+    import csv, io, json
+    from contextlib import redirect_stdout
+    proc = tmp_path / "data" / "vid"
+    rep = tmp_path / "reports" / "vid"
+    (rep / "frames").mkdir(parents=True)
+    proc.mkdir(parents=True)
+    (rep / "frames" / "frame_00003.jpg").write_bytes(b"thumb")       # copied by an earlier run
+    (rep / "frames" / "frame_00099.jpg").write_bytes(b"stale")       # no longer referenced
+    with (proc / "sync_per_shot.csv").open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["shot_idx", "start_sec", "end_sec", "duration_sec", "mid_frame"])
+        w.writeheader()
+        w.writerow({"shot_idx": 0, "start_sec": 0, "end_sec": 2, "duration_sec": 2,
+                    "mid_frame": "data/vid/frames/frame_00003.jpg"})              # source deleted
+    (proc / "sync_stats.json").write_text(json.dumps({}))
+    monkeypatch.setenv("PROCESSED_DIR", str(proc))
+    monkeypatch.setenv("REPORTS_DIR", str(rep))
+    p8 = load_phase("phase8_dashboard")
+    monkeypatch.setattr(p8, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr("sys.argv", ["phase8_dashboard.py"])
+    with redirect_stdout(io.StringIO()):
+        assert p8.main() == 0
+    assert (rep / "frames" / "frame_00003.jpg").exists()
+    assert not (rep / "frames" / "frame_00099.jpg").exists()

@@ -153,7 +153,9 @@ def transcribe_groq(audio_path: Path, language: str | None, processed: Path,
                 data.append(("language", language))
             resp = _cloud.request("POST", GROQ_URL, headers={"Authorization": f"Bearer {key}"},
                                   data=data, files={"file": ("audio.flac", audio, "audio/flac")},
-                                  timeout=600)
+                                  timeout=600,
+                                  # a duplicate costs < $0.001: retrying is worth it
+                                  idempotent=True)
             # never cache something that is not a transcription
             if not isinstance(resp, dict) or not isinstance(resp.get("segments"), list):
                 raise _cloud.CloudError(f"groq returned no segments: keys "

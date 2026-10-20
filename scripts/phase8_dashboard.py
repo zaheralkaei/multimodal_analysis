@@ -505,9 +505,11 @@ def main() -> int:
         mid_rel = s.get("mid_frame", "")
         if mid_rel:
             src = REPO_ROOT / mid_rel
+            # referenced = keep, even if the source frame was deleted to save
+            # space (round 13: cleanup then removed every thumbnail)
+            wanted.add(src.name)
             if src.exists():
                 dst = report_frames_dir / src.name
-                wanted.add(dst.name)
                 # Skip only an identical copy: same size AND same mtime (copy2
                 # preserves mtime). Size alone let a re-extracted frame with the
                 # same name and byte count keep the old picture (audit R9).
@@ -529,7 +531,6 @@ def main() -> int:
 
     headers = ["Thumb", "#", "Time", "Dur", "Emotion", "Camera", "Caption", "Audio",
                "Colors", "Location", "Lighting", "Composition", "Entities", "Lyrics", "Beat"]
-    col_i = {name: i for i, name in enumerate(headers)}
     header_cells = []
     for name in headers:
         header_cells.append(
@@ -696,7 +697,7 @@ def main() -> int:
                             f"within ±0.25 s — chance {a['chance_rate'] * 100:.0f}%, {verdict} "
                             f"(p = {a['p_value']:.3g}).</li>")
     if music_summary.get("tempo_bpm") and music_valid:
-        findings.append(f"<li>Music: <b>{music_summary['tempo_bpm']} BPM</b>, key <b>{music_summary.get('key', '?')}</b> "
+        findings.append(f"<li>Music: <b>{music_summary['tempo_bpm']} BPM</b>, key <b>{music_summary.get('key') or 'n/a'}</b> "
                        f"({music_summary.get('n_beats', '?')} beats across {music_summary.get('duration_sec', '?')}s).</li>")
     if clap_tags_present and music_valid:
         top_mood = max(clap_tags_present, key=lambda t: sum(float(r[t]) for r in clap) / len(clap))

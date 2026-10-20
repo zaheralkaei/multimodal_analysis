@@ -94,24 +94,42 @@ def cache_put_json(service: str, key: str, data) -> Path:
 
 # ------------------------------------------------------------------ HTTP
 
+MAX_WAIT_SEC = 120.0
+
+
 def request(method: str, url: str, *, headers=None, json_body=None, data=None, files=None,
-            timeout: int = 300, retries: int = 4, expect_json: bool = True):
-    """requests call with backoff. Raises CloudError with a short message."""
+            timeout: int = 300, retries: int = 4, expect_json: bool = True,
+            idempotent: bool | None = None):
+    """requests call with backoff. Raises CloudError with a short message.
+
+    idempotent=False (default for POST): the request may START A PAID JOB, so
+    it is retried only when it certainly did not reach the service — a failed
+    connection or HTTP 429 (rejected, not processed). A read timeout or a
+    500/502/504 may mean the job was accepted and only the reply was lost;
+    retrying could pay twice (round-13 audit). GET is always retried.
+    """
     import requests
+    if idempotent is None:
+        idempotent = method.upper() in ("GET", "HEAD", "PUT", "DELETE")
     delay = 2.0
     for attempt in range(retries + 1):
         try:
             r = requests.request(method, url, headers=headers, json=json_body, data=data,
                                  files=files, timeout=timeout)
         except (requests.ConnectionError, requests.Timeout) as e:
-            if attempt == retries:
-                raise CloudError(f"{method} {url.split('?')[0]}: network error {e}") from None
+            not_sent = isinstance(e, requests.ConnectTimeout) or (
+                isinstance(e, requests.ConnectionError) and not isinstance(e, requests.ReadTimeout))
+            if attempt == retries or not (idempotent or not_sent):
+                raise CloudError(f"{method} {url.split('?')[0]}: network error "
+                                 f"{type(e).__name__}") from None
             time.sleep(delay)
             delay = min(delay * 2, 60)
             continue
-        if r.status_code in RETRY_STATUS and attempt < retries:
+        retryable = r.status_code in RETRY_STATUS if idempotent else r.status_code == 429
+        if retryable and attempt < retries:
             ra = r.headers.get("Retry-After", "")
-            time.sleep(float(ra) if ra.replace(".", "", 1).isdigit() else delay)
+            wait = float(ra) if ra.replace(".", "", 1).isdigit() else delay
+            time.sleep(min(wait, MAX_WAIT_SEC))
             delay = min(delay * 2, 60)
             continue
         if r.status_code >= 400:

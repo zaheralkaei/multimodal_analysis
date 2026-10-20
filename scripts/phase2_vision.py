@@ -291,6 +291,8 @@ def parse_json_response(raw: str) -> dict:
         data = json.loads(text)
     except json.JSONDecodeError:
         return {"_parse_error": raw[:200]}
+    if not isinstance(data, dict):        # e.g. a bare number or list (round-13 fuzzing)
+        return {"_parse_error": raw[:200]}
 
     cleaned = {}
     for q in QUESTIONS:

@@ -222,3 +222,41 @@ def test_groq_cached_rerun_allowed_at_budget_cap(tmp_path, monkeypatch, cloud_en
     p4.transcribe_groq(audio, None, tmp_path)
     monkeypatch.setenv("AUDIO_MAX_USD", "0.0000001")                  # cap already exceeded
     assert p4.transcribe_groq(audio, None, tmp_path)                   # cached: allowed, free
+
+
+def test_paid_post_not_retried_after_ambiguous_failure(monkeypatch):
+    """A 502 or read timeout on a job submission may mean the job WAS accepted:
+    retrying could start (and pay for) a second job."""
+    import requests
+    import _cloud
+    monkeypatch.setattr(_cloud.time, "sleep", lambda s: None)
+    calls = []
+
+    class R:
+        status_code, headers, text = 502, {}, "bad gateway"
+    monkeypatch.setattr(requests, "request", lambda *a, **k: calls.append(1) or R())
+    with pytest.raises(_cloud.CloudError, match="502"):
+        _cloud.request("POST", "https://queue.fal.run/fal-ai/demucs", json_body={})
+    assert len(calls) == 1
+
+    def timeout(*a, **k):
+        calls.append(1)
+        raise requests.ReadTimeout("read timed out")
+    calls.clear()
+    monkeypatch.setattr(requests, "request", timeout)
+    with pytest.raises(_cloud.CloudError):
+        _cloud.request("POST", "https://api.replicate.com/v1/predictions", json_body={})
+    assert len(calls) == 1
+
+    class R429:
+        status_code, headers, text = 429, {"Retry-After": "99999"}, "slow down"
+    calls.clear()
+    seq = [R429(), R429()]
+    class OK:
+        status_code, headers, text = 200, {}, ""
+        def json(self): return {"ok": 1}
+    slept = []
+    monkeypatch.setattr(_cloud.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(requests, "request", lambda *a, **k: calls.append(1) or (seq.pop(0) if seq else OK()))
+    assert _cloud.request("POST", "https://x/y", json_body={}) == {"ok": 1}
+    assert len(calls) == 3 and max(slept) <= _cloud.MAX_WAIT_SEC

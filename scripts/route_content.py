@@ -79,7 +79,9 @@ def decide(shares: dict | None, content_type: str = "auto") -> dict:
         if expected_music and shares["music"] < MUSIC_SHARE_MIN:
             reasons.append(f"WARNING: you set {content_type} but only "
                            f"{shares['music'] * 100:.0f}% of windows sound like music")
-        if not expected_music and shares["music"] >= 0.7:
+        # same threshold as auto-detection (round 13: was 0.7, so a speech
+        # override on clearly musical audio passed without a warning)
+        if not expected_music and shares["music"] >= MUSIC_SHARE_MIN:
             reasons.append(f"WARNING: you set {content_type} but "
                            f"{shares['music'] * 100:.0f}% of windows sound like music")
     return {

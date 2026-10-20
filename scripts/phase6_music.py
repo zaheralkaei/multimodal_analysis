@@ -40,6 +40,11 @@ def estimate_key(chroma_mean):
     """Estimate musical key using Krumhansl-Schmuckler."""
     import numpy as np
     PITCH_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+    chroma_mean = np.asarray(chroma_mean, dtype=float)
+    if not np.all(np.isfinite(chroma_mean)) or np.std(chroma_mean) < 1e-9:
+        # silence or a flat spectrum: correlation is undefined (round-13
+        # audit: was reported as "C major" with correlation -Infinity)
+        return None, None
     best_score = -np.inf
     best_key = "C major"
     # rotate chroma and try major + minor for each
@@ -62,7 +67,6 @@ def analyze_music(audio_path: Path):
     """Extract music features. Returns (per_second_rows, summary_dict)."""
     import librosa
     import numpy as np
-    import csv
 
     print(f"[info] loading {audio_path.name} with librosa ...")
     y, sr = librosa.load(str(audio_path), sr=22050, mono=True)
@@ -81,7 +85,8 @@ def analyze_music(audio_path: Path):
     chroma = librosa.feature.chroma_stft(y=y, sr=sr)
     chroma_mean = chroma.mean(axis=1)
     key, key_corr = estimate_key(chroma_mean)
-    print(f"[info] estimated key: {key} (corr {key_corr:.2f})")
+    print(f"[info] estimated key: {key} (corr {key_corr:.2f})" if key else
+          "[info] no key: silent or flat audio")
 
     # Per-second features
     print("[info] extracting per-second features ...")
@@ -115,7 +120,7 @@ def analyze_music(audio_path: Path):
         "tempo_bpm": round(float(tempo), 2),
         "n_beats": len(beat_times),
         "key": key,
-        "key_correlation": round(key_corr, 3),
+        "key_correlation": None if key_corr is None else round(key_corr, 3),
         "beat_times": [round(float(b), 3) for b in beat_times.tolist()],
     }
     return rows, summary
@@ -172,7 +177,7 @@ def main() -> int:
 
     # Write summary JSON
     out_json = PROCESSED / "music_summary.json"
-    out_json.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    out_json.write_text(json.dumps(summary, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     print(f"[ok] wrote {disp(out_json)}")
     from _lineage import record
     inputs = [audio_path] + ([PROCESSED / "content_route.json"]
